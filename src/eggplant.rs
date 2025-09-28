@@ -127,6 +127,7 @@ impl EggplantCodeGenerator {
         self.add_line("// Generated Eggplant Rust Code");
         self.add_line("// Source files referenced in comments below");
         self.add_line("use eggplant::{{prelude::*, tx_rx_vt_pr}};");
+        self.add_line("use log::info;");
         self.add_line("");
 
         // Generate type definitions (outside main)
@@ -142,6 +143,7 @@ impl EggplantCodeGenerator {
         // Add main function
         self.add_line("fn main() {");
         self.indent();
+        self.add_line("env_logger::init();");
 
         // Generate runtime commands (inside main)
         for cmd_with_source in commands {
@@ -155,7 +157,7 @@ impl EggplantCodeGenerator {
             }
         }
 
-        self.add_line("println!(\"Eggplant program executed successfully!\");");
+        self.add_line("info!(\"Eggplant program executed successfully!\");");
         self.dedent();
         self.add_line("}");
 
@@ -310,7 +312,7 @@ impl EggplantCodeGenerator {
                 self.add_line(&format!("let {} = {};", var, self.expr_to_string(expr)));
             }
             EggplantCommand::Print { expr } => {
-                self.add_line(&format!("println!(\"{{:?}}\", {});", self.expr_to_string(expr)));
+                self.add_line(&format!("info!(\"{{:?}}\", {});", self.expr_to_string(expr)));
             }
         }
     }

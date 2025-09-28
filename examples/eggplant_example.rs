@@ -6,13 +6,15 @@
 use eggplant_transpiler::ast::parse::Parser;
 use eggplant_transpiler::eggplant::*;
 use eggplant_transpiler::{Expr, Literal, Span};
+use log::{info, debug};
 use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== Eggplant Code Generation Example ===");
+    env_logger::init();
+    info!("=== Eggplant Code Generation Example ===");
 
     // Traverse all .egg files in examples folder
-    println!("\n1. Traversing .egg files in examples folder...");
+    info!("1. Traversing .egg files in examples folder...");
     let mut parser = Parser::default();
     let mut rust_gen = EggplantCodeGenerator::new();
     let mut generated_files = Vec::new();
@@ -23,17 +25,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if path.extension().map_or(false, |ext| ext == "egg") {
             let file_name = path.file_name().unwrap().to_string_lossy().to_string();
-            println!("\n=== Parsing {} ===", file_name);
+            info!("=== Parsing {} ===", file_name);
 
             let content = fs::read_to_string(&path)?;
             let commands = parser.get_program_from_string(Some(file_name.clone()), &content)?;
             let eggplant_commands = convert_to_eggplant_with_source(&commands, Some(path.to_string_lossy().to_string()));
 
-            println!("Converted {} egglog commands to {} eggplant commands",
+            debug!("Converted {} egglog commands to {} eggplant commands",
                 commands.len(), eggplant_commands.len());
 
             let rust_code = rust_gen.generate_rust(&eggplant_commands);
-            println!("Generated {} lines of Rust code", rust_code.lines().count());
+            debug!("Generated {} lines of Rust code", rust_code.lines().count());
 
             let output_file = format!("generated/eggplant/{}.rs", path.file_stem().unwrap().to_string_lossy());
             fs::create_dir_all("generated/eggplant")?;
@@ -43,13 +45,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("\nGenerated files saved to:");
+    info!("Generated files saved to:");
     for file in &generated_files {
-        println!("  - {}", file);
+        info!("  - {}", file);
     }
 
     // Demonstrate simple eggplant program
-    println!("\n9. Demonstrating simple eggplant program...");
+    info!("9. Demonstrating simple eggplant program...");
 
     let simple_commands = vec![
         EggplantCommandWithSource {
@@ -159,9 +161,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     fs::write("generated/eggplant/simple.rs", &simple_rust)?;
 
-    println!("  - generated/eggplant/simple.rs");
+    info!("  - generated/eggplant/simple.rs");
 
-    println!("\n=== Eggplant Code Generation Complete ===");
+    info!("=== Eggplant Code Generation Complete ===");
 
     Ok(())
 }
