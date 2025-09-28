@@ -76,11 +76,11 @@ fn main() {
     tx_rx_vt_pr!(MyTx, MyPatRec);
     
     // Source: examples/calc.egg:4
-    let I = IConst();
+    let I = IConst::new();
     // Source: examples/calc.egg:6
-    let A = AConst();
+    let A = AConst::new();
     // Source: examples/calc.egg:8
-    let B = BConst();
+    let B = BConst::new();
     // Source: examples/calc.egg:12
     // Rule: rule_12
     MyTx::add_rule(
@@ -163,23 +163,23 @@ rule_16Pat::new(A)
     );
     
     // Source: examples/calc.egg:17
-    let A2 = g_(A, A);
+    let A2 = g_::new(&A, &A);
     // Source: examples/calc.egg:18
-    let A4 = g_(A2, A2);
+    let A4 = g_::new(&A2, &A2);
     // Source: examples/calc.egg:19
-    let A8 = g_(A4, A4);
+    let A8 = g_::new(&A4, &A4);
     // Source: examples/calc.egg:20
-    // Assert: g_(A4, A4) == g_(g_(A2, A2), g_(A2, A2))
+    // Assert: g_::new(&A4, &A4) == g_::new(&g_::new(&A2, &A2), &g_::new(&A2, &A2))
     // Source: examples/calc.egg:21
-    // Assert: g_(g_(A2, A2), g_(A2, A2)) == g_(A2, g_(A2, g_(A2, A2)))
+    // Assert: g_::new(&g_::new(&A2, &A2), &g_::new(&A2, &A2)) == g_::new(&A2, &g_::new(&A2, &g_::new(&A2, &A2)))
     // Source: examples/calc.egg:24
-    let a = aConst();
+    let a = aConst::new();
     // Source: examples/calc.egg:25
-    let b = bConst();
+    let b = bConst::new();
     // Source: examples/calc.egg:27
-    // Assert: g_(g_(b, g_(inv(a), a)), inv(b)) == g_(b, inv(b))
+    // Assert: g_::new(&g_::new(&b, &g_::new(&inv::new(&a), &a)), &inv::new(&b)) == g_::new(&b, &inv::new(&b))
     // Source: examples/calc.egg:28
-    // Assert: g_(b, inv(b)) == I
+    // Assert: g_::new(&b, &inv::new(&b)) == I
     // Source: examples/calc.egg:28
     let default_ruleset = MyTx::new_ruleset("default_ruleset");
     // Source: examples/calc.egg:28

@@ -50,8 +50,8 @@ ctx.union(pat.p, add_value);
     
     // Source: examples/simple.egg:4
     // Rewrite rule: add_simplify
-    // Add(Num(1), Num(2)) => Num(3)
+    // Add::new(&Num::new(1), &Num::new(2)) => Num::new(3)
     // Source: examples/simple.egg:5
-    // Assert: eval(Add(Num(1), Num(2))) == Num(3)
+    // Assert: eval::new(&Add::new(&Num::new(1), &Num::new(2))) == Num::new(3)
     info!("Eggplant program executed successfully!");
 }

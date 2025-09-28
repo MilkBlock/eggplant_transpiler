@@ -5,8 +5,67 @@ use log::info;
 
 // Source: examples/math.egg:2
 // Datatype 'Math' defined with variants:
+//   - Diff: variant (defined at math.egg:1)
+//   - Integral: variant (defined at math.egg:1)
+//   - Add: variant (defined at math.egg:1)
+//   - Sub: variant (defined at math.egg:1)
+//   - Mul: variant (defined at math.egg:1)
+//   - Div: variant (defined at math.egg:1)
+//   - Pow: variant (defined at math.egg:1)
+//   - Ln: variant (defined at math.egg:1)
+//   - Sqrt: variant (defined at math.egg:1)
+//   - Sin: variant (defined at math.egg:1)
+//   - Cos: variant (defined at math.egg:1)
+//   - Const: variant (defined at math.egg:1)
+//   - Var: variant (defined at math.egg:1)
 #[eggplant::dsl]
 enum Math {
+    Diff { 
+        arg_Math_00: Math,
+        arg_Math_01: Math,
+    },
+    Integral { 
+        arg_Math_10: Math,
+        arg_Math_11: Math,
+    },
+    Add { 
+        arg_Math_20: Math,
+        arg_Math_21: Math,
+    },
+    Sub { 
+        arg_Math_30: Math,
+        arg_Math_31: Math,
+    },
+    Mul { 
+        arg_Math_40: Math,
+        arg_Math_41: Math,
+    },
+    Div { 
+        arg_Math_50: Math,
+        arg_Math_51: Math,
+    },
+    Pow { 
+        arg_Math_60: Math,
+        arg_Math_61: Math,
+    },
+    Ln { 
+        arg_Math_70: Math,
+    },
+    Sqrt { 
+        arg_Math_80: Math,
+    },
+    Sin { 
+        arg_Math_90: Math,
+    },
+    Cos { 
+        arg_Math_100: Math,
+    },
+    Const { 
+        arg_i64_110: i64,
+    },
+    Var { 
+        arg_String_120: String,
+    },
 }
 
 // Source: examples/math.egg:13
@@ -308,7 +367,7 @@ let add_node1 = Add::query(&a, &b);
 rule_13Pat::new(a, b)
         },
         |ctx, pat| {
-            let result = Add::new(pat.b, pat.a);
+            let result = Add::new(&pat.b, &pat.a);
 ctx.union(pat.rule_13_node1, result);
         },
     );
@@ -325,7 +384,7 @@ let mul_node1 = Mul::query(&a, &b);
 rule_14Pat::new(a, b)
         },
         |ctx, pat| {
-            let result = Mul::new(pat.b, pat.a);
+            let result = Mul::new(&pat.b, &pat.a);
 ctx.union(pat.rule_14_node1, result);
         },
     );
@@ -344,7 +403,7 @@ let add_node3 = Add::query(&a, &add_node2);
 rule_15Pat::new(a, b, c)
         },
         |ctx, pat| {
-            let result = Add::new(pat.add_node2, pat.c);
+            let result = Add::new(&pat.add_node2, &pat.c);
 ctx.union(pat.rule_15_node1, result);
         },
     );
@@ -363,7 +422,7 @@ let mul_node3 = Mul::query(&a, &mul_node2);
 rule_16Pat::new(a, b, c)
         },
         |ctx, pat| {
-            let result = Mul::new(pat.mul_node2, pat.c);
+            let result = Mul::new(&pat.mul_node2, &pat.c);
 ctx.union(pat.rule_16_node1, result);
         },
     );
@@ -380,7 +439,7 @@ let sub_node1 = Sub::query(&a, &b);
 rule_17Pat::new(a, b)
         },
         |ctx, pat| {
-            let result = Add::new(pat.a, pat.mul_node2);
+            let result = Add::new(&pat.a, &pat.mul_node2);
 ctx.union(pat.rule_17_node1, result);
         },
     );
@@ -397,7 +456,7 @@ let div_node1 = Div::query(&a, &b);
 rule_18Pat::new(a, b)
         },
         |ctx, pat| {
-            let result = Mul::new(pat.a, pat.pow_node2);
+            let result = Mul::new(&pat.a, &pat.pow_node2);
 ctx.union(pat.rule_18_node1, result);
         },
     );
@@ -497,7 +556,7 @@ let mul_node3 = Mul::query(&a, &add_node2);
 rule_24Pat::new(a, b, c)
         },
         |ctx, pat| {
-            let result = Add::new(pat.mul_node2, pat.mul_node3);
+            let result = Add::new(&pat.mul_node2, &pat.mul_node3);
 ctx.union(pat.rule_24_node1, result);
         },
     );
@@ -517,7 +576,7 @@ let add_node5 = Add::query(&mul_node3, &mul_node4);
 rule_25Pat::new(a, b, c)
         },
         |ctx, pat| {
-            let result = Mul::new(pat.a, pat.add_node2);
+            let result = Mul::new(&pat.a, &pat.add_node2);
 ctx.union(pat.rule_25_node1, result);
         },
     );
@@ -537,7 +596,7 @@ let mul_node5 = Mul::query(&pow_node3, &pow_node4);
 rule_26Pat::new(a, b, c)
         },
         |ctx, pat| {
-            let result = Pow::new(pat.a, pat.add_node2);
+            let result = Pow::new(&pat.a, &pat.add_node2);
 ctx.union(pat.rule_26_node1, result);
         },
     );
@@ -587,7 +646,7 @@ let pow_node3 = Pow::query(&x, &const_node2);
 rule_29Pat::new(x)
         },
         |ctx, pat| {
-            let result = Mul::new(pat.x, pat.x);
+            let result = Mul::new(&pat.x, &pat.x);
 ctx.union(pat.rule_29_node1, result);
         },
     );
@@ -605,7 +664,7 @@ let pow_node3 = Pow::query(&x, &const_node2);
 rule_30Pat::new(x, -1)
         },
         |ctx, pat| {
-            let result = Div::new(pat.const_node2, pat.x);
+            let result = Div::new(&pat.const_node2, &pat.x);
 ctx.union(pat.rule_30_node1, result);
         },
     );
@@ -658,7 +717,7 @@ let diff_node3 = Diff::query(&x, &add_node2);
 rule_34Pat::new(x, a, b)
         },
         |ctx, pat| {
-            let result = Add::new(pat.diff_node2, pat.diff_node3);
+            let result = Add::new(&pat.diff_node2, &pat.diff_node3);
 ctx.union(pat.rule_34_node1, result);
         },
     );
@@ -677,7 +736,7 @@ let diff_node3 = Diff::query(&x, &mul_node2);
 rule_35Pat::new(x, a, b)
         },
         |ctx, pat| {
-            let result = Add::new(pat.mul_node2, pat.mul_node3);
+            let result = Add::new(&pat.mul_node2, &pat.mul_node3);
 ctx.union(pat.rule_35_node1, result);
         },
     );
@@ -694,7 +753,7 @@ let diff_node3 = Diff::query(&x, &sin_node2);
 rule_36Pat::new(x)
         },
         |ctx, pat| {
-            let result = Cos::new(pat.x);
+            let result = Cos::new(&pat.x);
 ctx.union(pat.rule_36_node1, result);
         },
     );
@@ -711,7 +770,7 @@ let diff_node3 = Diff::query(&x, &cos_node2);
 rule_37Pat::new(x)
         },
         |ctx, pat| {
-            let result = Mul::new(pat.const_node2, pat.sin_node3);
+            let result = Mul::new(&pat.const_node2, &pat.sin_node3);
 ctx.union(pat.rule_37_node1, result);
         },
     );
@@ -728,7 +787,7 @@ let diff_node3 = Diff::query(&x, &ln_node2);
 rule_38Pat::new(x)
         },
         |ctx, pat| {
-            let result = Div::new(pat.const_node2, pat.x);
+            let result = Div::new(&pat.const_node2, &pat.x);
 ctx.union(pat.rule_38_node1, result);
         },
     );
@@ -762,7 +821,7 @@ let integral_node3 = Integral::query(&pow_node2, &x);
 rule_40Pat::new(x, c)
         },
         |ctx, pat| {
-            let result = Div::new(pat.pow_node2, pat.add_node3);
+            let result = Div::new(&pat.pow_node2, &pat.add_node3);
 ctx.union(pat.rule_40_node1, result);
         },
     );
@@ -779,7 +838,7 @@ let integral_node3 = Integral::query(&cos_node2, &x);
 rule_41Pat::new(x)
         },
         |ctx, pat| {
-            let result = Sin::new(pat.x);
+            let result = Sin::new(&pat.x);
 ctx.union(pat.rule_41_node1, result);
         },
     );
@@ -796,7 +855,7 @@ let integral_node3 = Integral::query(&sin_node2, &x);
 rule_42Pat::new(x)
         },
         |ctx, pat| {
-            let result = Mul::new(pat.const_node2, pat.cos_node3);
+            let result = Mul::new(&pat.const_node2, &pat.cos_node3);
 ctx.union(pat.rule_42_node1, result);
         },
     );
@@ -815,7 +874,7 @@ let integral_node3 = Integral::query(&add_node2, &x);
 rule_43Pat::new(f, g, x)
         },
         |ctx, pat| {
-            let result = Add::new(pat.integral_node2, pat.integral_node3);
+            let result = Add::new(&pat.integral_node2, &pat.integral_node3);
 ctx.union(pat.rule_43_node1, result);
         },
     );
@@ -834,7 +893,7 @@ let integral_node3 = Integral::query(&sub_node2, &x);
 rule_44Pat::new(f, g, x)
         },
         |ctx, pat| {
-            let result = Sub::new(pat.integral_node2, pat.integral_node3);
+            let result = Sub::new(&pat.integral_node2, &pat.integral_node3);
 ctx.union(pat.rule_44_node1, result);
         },
     );
@@ -853,15 +912,15 @@ let integral_node3 = Integral::query(&mul_node2, &x);
 rule_45Pat::new(a, b, x)
         },
         |ctx, pat| {
-            let result = Sub::new(pat.mul_node2, pat.integral_node3);
+            let result = Sub::new(&pat.mul_node2, &pat.integral_node3);
 ctx.union(pat.rule_45_node1, result);
         },
     );
     
     // Source: examples/math.egg:46
-    let start_expr2 = Add(Const(1), Sub(Var('a'), Mul(Sub(Const(2), Const(1)), Var('a'))));
+    let start_expr2 = Add::new(&Const::new(1), &Sub::new(&Var::new('a'), &Mul::new(&Sub::new(&Const::new(2), &Const::new(1)), &Var::new('a'))));
     // Source: examples/math.egg:48
-    let end_expr2 = Const(1);
+    let end_expr2 = Const::new(1);
     // Source: examples/math.egg:49
     // Assert: start_expr2 == end_expr2
     // Source: examples/math.egg:50

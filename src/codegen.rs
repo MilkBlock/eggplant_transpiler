@@ -37,36 +37,78 @@ impl RustCodeGenerator {
                 self.add_line(&format!("let {} = egglog::Sort::new(\"{}\");", name, name));
             }
             Command::Sort(_, name, Some((container, args))) => {
-                self.add_line(&format!("let {} = {}::new({});", name, container,
-                    args.iter().map(|arg| self.expr_to_string(arg)).collect::<Vec<_>>().join(", ")));
+                self.add_line(&format!(
+                    "let {} = {}::new({});",
+                    name,
+                    container,
+                    args.iter()
+                        .map(|arg| self.expr_to_string(arg))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
             Command::Datatype { name, variants, .. } => {
-                self.add_line(&format!("let {} = egglog::Datatype::new(\"{}\");", name, name));
+                self.add_line(&format!(
+                    "let {} = egglog::Datatype::new(\"{}\");",
+                    name, name
+                ));
                 for variant in variants {
-                    self.add_line(&format!("let {} = {}.add_variant(\"{}\", vec![]);",
-                        variant.name, name, variant.name));
+                    self.add_line(&format!(
+                        "let {} = {}.add_variant(\"{}\", vec![]);",
+                        variant.name, name, variant.name
+                    ));
                 }
             }
             Command::Function { name, schema, .. } => {
-                let inputs = schema.input.iter().map(|s| format!("\"{}\".into()", s)).collect::<Vec<_>>().join(", ");
-                self.add_line(&format!("let {} = egglog::Function::new(\"{}\", vec![{}], \"{}\".into());",
-                    name, name, inputs, schema.output));
+                let inputs = schema
+                    .input
+                    .iter()
+                    .map(|s| format!("\"{}\".into()", s))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.add_line(&format!(
+                    "let {} = egglog::Function::new(\"{}\", vec![{}], \"{}\".into());",
+                    name, name, inputs, schema.output
+                ));
             }
             Command::Constructor { name, schema, .. } => {
-                let inputs = schema.input.iter().map(|s| format!("\"{}\".into()", s)).collect::<Vec<_>>().join(", ");
-                self.add_line(&format!("let {} = egglog::Constructor::new(\"{}\", vec![{}], \"{}\".into());",
-                    name, name, inputs, schema.output));
+                let inputs = schema
+                    .input
+                    .iter()
+                    .map(|s| format!("\"{}\".into()", s))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.add_line(&format!(
+                    "let {} = egglog::Constructor::new(\"{}\", vec![{}], \"{}\".into());",
+                    name, name, inputs, schema.output
+                ));
             }
             Command::Relation { name, inputs, .. } => {
-                let input_str = inputs.iter().map(|s| format!("\"{}\".into()", s)).collect::<Vec<_>>().join(", ");
-                self.add_line(&format!("let {} = egglog::Relation::new(\"{}\", vec![{}]);",
-                    name, name, input_str));
+                let input_str = inputs
+                    .iter()
+                    .map(|s| format!("\"{}\".into()", s))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.add_line(&format!(
+                    "let {} = egglog::Relation::new(\"{}\", vec![{}]);",
+                    name, name, input_str
+                ));
             }
             Command::AddRuleset(_, name) => {
-                self.add_line(&format!("let {} = egglog::Ruleset::new(\"{}\");", name, name));
+                self.add_line(&format!(
+                    "let {} = egglog::Ruleset::new(\"{}\");",
+                    name, name
+                ));
             }
-            Command::Rule { name, ruleset, rule } => {
-                self.add_line(&format!("let {}_rule = {}::add_rule(\"{}\", |egraph| {{", ruleset, ruleset, name));
+            Command::Rule {
+                name,
+                ruleset,
+                rule,
+            } => {
+                self.add_line(&format!(
+                    "let {}_rule = {}::add_rule(\"{}\", |egraph| {{",
+                    ruleset, ruleset, name
+                ));
                 self.indent();
 
                 // Generate body facts
@@ -83,7 +125,10 @@ impl RustCodeGenerator {
                 self.add_line("});");
             }
             Command::Rewrite(name, rewrite, _) => {
-                self.add_line(&format!("let {}_rewrite = {}::add_rewrite(\"{}\", |egraph| {{", name, name, name));
+                self.add_line(&format!(
+                    "let {}_rewrite = {}::add_rewrite(\"{}\", |egraph| {{",
+                    name, name, name
+                ));
                 self.indent();
 
                 self.add_line(&format!("let lhs = {};", self.expr_to_string(&rewrite.lhs)));
@@ -99,7 +144,10 @@ impl RustCodeGenerator {
                 self.add_line("});");
             }
             Command::BiRewrite(name, rewrite) => {
-                self.add_line(&format!("let {}_birewrite = {}::add_birewrite(\"{}\", |egraph| {{", name, name, name));
+                self.add_line(&format!(
+                    "let {}_birewrite = {}::add_birewrite(\"{}\", |egraph| {{",
+                    name, name, name
+                ));
                 self.indent();
 
                 self.add_line(&format!("let lhs = {};", self.expr_to_string(&rewrite.lhs)));
@@ -147,7 +195,11 @@ impl RustCodeGenerator {
             }
             Command::Output { file, exprs, .. } => {
                 let expr_strs: Vec<String> = exprs.iter().map(|e| self.expr_to_string(e)).collect();
-                self.add_line(&format!("egraph.output_to_file(\"{}\", vec![{}]);", file, expr_strs.join(", ")));
+                self.add_line(&format!(
+                    "egraph.output_to_file(\"{}\", vec![{}]);",
+                    file,
+                    expr_strs.join(", ")
+                ));
             }
             Command::Include(_, file) => {
                 self.add_line(&format!("// include \"{}\"", file));
@@ -164,12 +216,17 @@ impl RustCodeGenerator {
     fn generate_fact(&mut self, fact: &Fact) {
         match fact {
             Fact::Eq(_, e1, e2) => {
-                self.add_line(&format!("let eq_check = egraph.check_equal({}, {});",
-                    self.expr_to_string(e1), self.expr_to_string(e2)));
+                self.add_line(&format!(
+                    "let eq_check = egraph.check_equal({}, {});",
+                    self.expr_to_string(e1),
+                    self.expr_to_string(e2)
+                ));
             }
             Fact::Fact(expr) => {
-                self.add_line(&format!("let fact_check = egraph.check_fact({});",
-                    self.expr_to_string(expr)));
+                self.add_line(&format!(
+                    "let fact_check = egraph.check_fact({});",
+                    self.expr_to_string(expr)
+                ));
             }
         }
     }
@@ -180,13 +237,24 @@ impl RustCodeGenerator {
                 self.add_line(&format!("let {} = {};", var, self.expr_to_string(expr)));
             }
             Action::Set(_, func, args, value) => {
-                let arg_str = args.iter().map(|a| self.expr_to_string(a)).collect::<Vec<_>>().join(", ");
-                self.add_line(&format!("{}.set(egraph, vec![{}], {});",
-                    func, arg_str, self.expr_to_string(value)));
+                let arg_str = args
+                    .iter()
+                    .map(|a| self.expr_to_string(a))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                self.add_line(&format!(
+                    "{}.set(egraph, vec![{}], {});",
+                    func,
+                    arg_str,
+                    self.expr_to_string(value)
+                ));
             }
             Action::Union(_, e1, e2) => {
-                self.add_line(&format!("egraph.union({}, {});",
-                    self.expr_to_string(e1), self.expr_to_string(e2)));
+                self.add_line(&format!(
+                    "egraph.union({}, {});",
+                    self.expr_to_string(e1),
+                    self.expr_to_string(e2)
+                ));
             }
             Action::Expr(_, expr) => {
                 self.add_line(&format!("let _ = {};", self.expr_to_string(expr)));
@@ -205,9 +273,23 @@ impl RustCodeGenerator {
             },
             Expr::Var(_, var) => var.clone(),
             Expr::Call(_, func, args) => {
-                let arg_str = args.iter().map(|a| self.expr_to_string(a)).collect::<Vec<_>>().join(", ");
-                format!("{}({})", func, arg_str)
+                let arg_str = args
+                    .iter()
+                    .map(|a| self.expr_with_reference(a))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}::new({})", func, arg_str)
             }
+        }
+    }
+
+    fn expr_with_reference(&self, expr: &Expr) -> String {
+        let expr_str = self.expr_to_string(expr);
+        // Check if this is a basic type (literal) or custom type (variable/call)
+        match expr {
+            Expr::Lit(_, _) => expr_str, // Basic types don't need references
+            Expr::Var(_, _) => format!("&{}", expr_str), // Custom types need references
+            Expr::Call(_, _, _) => format!("&{}", expr_str), // Custom types need references
         }
     }
 

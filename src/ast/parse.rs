@@ -23,7 +23,11 @@ impl Parser {
         Self::default()
     }
 
-    pub fn get_program_from_string(&mut self, file: Option<String>, input: &str) -> Result<Vec<Command>, ParseError> {
+    pub fn get_program_from_string(
+        &mut self,
+        file: Option<String>,
+        input: &str,
+    ) -> Result<Vec<Command>, ParseError> {
         self.current_file = file;
         self.tokenize(input)?;
         self.parse_program()
@@ -89,10 +93,14 @@ impl Parser {
                         col += 1;
                     }
 
-                    if symbol.chars().all(|c| c.is_ascii_digit() || c == '-' && symbol.len() == 1) {
+                    if symbol
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || c == '-' && symbol.len() == 1)
+                    {
                         self.tokens.push_back(Token::Number(symbol));
                     } else if symbol.starts_with(':') {
-                        self.tokens.push_back(Token::Keyword(symbol[1..].to_string()));
+                        self.tokens
+                            .push_back(Token::Keyword(symbol[1..].to_string()));
                     } else {
                         self.tokens.push_back(Token::Symbol(symbol));
                     }
@@ -109,7 +117,11 @@ impl Parser {
                 commands.push(command);
             } else {
                 // Print debug info when parsing fails
-                log::debug!("Failed to parse command, parsed {} commands so far, remaining tokens: {:?}", commands.len(), self.tokens);
+                log::debug!(
+                    "Failed to parse command, parsed {} commands so far, remaining tokens: {:?}",
+                    commands.len(),
+                    self.tokens
+                );
                 // Don't break, try to continue parsing
                 // Skip the problematic token and continue
                 if !self.tokens.is_empty() {
@@ -123,7 +135,6 @@ impl Parser {
     fn parse_command(&mut self) -> Result<Command, ParseError> {
         self.expect_token(Token::LParen)?;
         let command_name = self.parse_symbol()?;
-
 
         let command = match command_name.as_str() {
             "datatype" => self.parse_datatype()?,
@@ -140,7 +151,10 @@ impl Parser {
             _ => {
                 // For unsupported commands, create a simple action
                 let expr = self.parse_expr()?;
-                Command::Action(Action::Expr(Span::new(self.current_file.clone(), 1, 1), expr))
+                Command::Action(Action::Expr(
+                    Span::new(self.current_file.clone(), 1, 1),
+                    expr,
+                ))
             }
         };
 
@@ -153,7 +167,8 @@ impl Parser {
         let mut variants = Vec::new();
 
         while self.peek_token() != Some(&Token::RParen) {
-            variants.push(self.parse_variant()?);
+            let variant = self.parse_variant()?;
+            variants.push(variant);
         }
 
         Ok(Command::Datatype {
@@ -210,7 +225,10 @@ impl Parser {
 
         let output = self.parse_symbol()?;
 
-        Ok(Schema { input: inputs, output })
+        Ok(Schema {
+            input: inputs,
+            output,
+        })
     }
 
     fn parse_let(&mut self) -> Result<Command, ParseError> {
@@ -315,7 +333,10 @@ impl Parser {
 
     fn parse_pop(&mut self) -> Result<Command, ParseError> {
         let n = self.parse_number()?;
-        Ok(Command::Pop(Span::new(self.current_file.clone(), 1, 1), n.try_into().unwrap()))
+        Ok(Command::Pop(
+            Span::new(self.current_file.clone(), 1, 1),
+            n.try_into().unwrap(),
+        ))
     }
 
     fn parse_run(&mut self) -> Result<Command, ParseError> {
@@ -372,29 +393,50 @@ impl Parser {
                 }
 
                 self.expect_token(Token::RParen)?;
-                Ok(Expr::Call(Span::new(self.current_file.clone(), 1, 1), func, args))
+                Ok(Expr::Call(
+                    Span::new(self.current_file.clone(), 1, 1),
+                    func,
+                    args,
+                ))
             }
             Some(Token::Number(_n)) => {
                 let num = self.parse_number()?;
-                Ok(Expr::Lit(Span::new(self.current_file.clone(), 1, 1), Literal::Int(num)))
+                Ok(Expr::Lit(
+                    Span::new(self.current_file.clone(), 1, 1),
+                    Literal::Int(num),
+                ))
             }
             Some(Token::String(_s)) => {
                 let s = self.parse_string()?;
-                Ok(Expr::Lit(Span::new(self.current_file.clone(), 1, 1), Literal::String(s)))
+                Ok(Expr::Lit(
+                    Span::new(self.current_file.clone(), 1, 1),
+                    Literal::String(s),
+                ))
             }
             Some(Token::Symbol(_s)) => {
                 let sym = self.parse_symbol()?;
                 Ok(Expr::Var(Span::new(self.current_file.clone(), 1, 1), sym))
             }
-            _ => Err(ParseError::new(Span::new(self.current_file.clone(), 1, 1), "Expected expression".to_string())),
+            _ => Err(ParseError::new(
+                Span::new(self.current_file.clone(), 1, 1),
+                "Expected expression".to_string(),
+            )),
         }
     }
 
     fn parse_number(&mut self) -> Result<i64, ParseError> {
         if let Some(Token::Number(n)) = self.tokens.pop_front() {
-            n.parse().map_err(|_| ParseError::new(Span::new(self.current_file.clone(), 1, 1), "Invalid number".to_string()))
+            n.parse().map_err(|_| {
+                ParseError::new(
+                    Span::new(self.current_file.clone(), 1, 1),
+                    "Invalid number".to_string(),
+                )
+            })
         } else {
-            Err(ParseError::new(Span::new(self.current_file.clone(), 1, 1), "Expected number".to_string()))
+            Err(ParseError::new(
+                Span::new(self.current_file.clone(), 1, 1),
+                "Expected number".to_string(),
+            ))
         }
     }
 
@@ -402,7 +444,10 @@ impl Parser {
         if let Some(Token::String(s)) = self.tokens.pop_front() {
             Ok(s)
         } else {
-            Err(ParseError::new(Span::new(self.current_file.clone(), 1, 1), "Expected string".to_string()))
+            Err(ParseError::new(
+                Span::new(self.current_file.clone(), 1, 1),
+                "Expected string".to_string(),
+            ))
         }
     }
 
@@ -410,7 +455,10 @@ impl Parser {
         match self.tokens.pop_front() {
             Some(Token::Symbol(s)) => Ok(s),
             Some(Token::Keyword(k)) => Ok(k),
-            _ => Err(ParseError::new(Span::new(self.current_file.clone(), 1, 1), "Expected symbol".to_string())),
+            _ => Err(ParseError::new(
+                Span::new(self.current_file.clone(), 1, 1),
+                "Expected symbol".to_string(),
+            )),
         }
     }
 
@@ -419,10 +467,16 @@ impl Parser {
             if token == expected {
                 Ok(())
             } else {
-                Err(ParseError::new(Span::new(self.current_file.clone(), 1, 1), format!("Expected {:?}, got {:?}", expected, token)))
+                Err(ParseError::new(
+                    Span::new(self.current_file.clone(), 1, 1),
+                    format!("Expected {:?}, got {:?}", expected, token),
+                ))
             }
         } else {
-            Err(ParseError::new(Span::new(self.current_file.clone(), 1, 1), format!("Expected {:?}, but no more tokens", expected)))
+            Err(ParseError::new(
+                Span::new(self.current_file.clone(), 1, 1),
+                format!("Expected {:?}, but no more tokens", expected),
+            ))
         }
     }
 
@@ -471,7 +525,10 @@ mod tests {
         let egglog_tests_path = Path::new("/Users/mineralsteins/Repos/egglog/tests");
 
         if !egglog_tests_path.exists() {
-            println!("Egglog tests directory not found at: {:?}", egglog_tests_path);
+            println!(
+                "Egglog tests directory not found at: {:?}",
+                egglog_tests_path
+            );
             return;
         }
 
@@ -492,19 +549,31 @@ mod tests {
 
                         match fs::read_to_string(&path) {
                             Ok(content) => {
-                                match parser.get_program_from_string(Some(path.to_string_lossy().to_string()), &content) {
+                                match parser.get_program_from_string(
+                                    Some(path.to_string_lossy().to_string()),
+                                    &content,
+                                ) {
                                     Ok(commands) => {
                                         parsed_successfully += 1;
-                                        println!("  ✓ Successfully parsed {} commands", commands.len());
+                                        println!(
+                                            "  ✓ Successfully parsed {} commands",
+                                            commands.len()
+                                        );
                                     }
                                     Err(e) => {
-                                        failed_files.push((path.to_string_lossy().to_string(), e.to_string()));
+                                        failed_files.push((
+                                            path.to_string_lossy().to_string(),
+                                            e.to_string(),
+                                        ));
                                         println!("  ✗ Failed to parse: {}", e);
                                     }
                                 }
                             }
                             Err(e) => {
-                                failed_files.push((path.to_string_lossy().to_string(), format!("Failed to read file: {}", e)));
+                                failed_files.push((
+                                    path.to_string_lossy().to_string(),
+                                    format!("Failed to read file: {}", e),
+                                ));
                                 println!("  ✗ Failed to read file: {}", e);
                             }
                         }
@@ -527,7 +596,9 @@ mod tests {
 
         // For now, we'll just print the results but not fail the test
         // This allows us to see which files work and which don't
-        println!("\nNote: This test does not fail on parsing errors to allow incremental development.");
+        println!(
+            "\nNote: This test does not fail on parsing errors to allow incremental development."
+        );
         println!("The goal is to gradually improve the parser to handle all .egg files.");
     }
 }
