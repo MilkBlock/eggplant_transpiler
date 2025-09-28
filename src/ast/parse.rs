@@ -108,7 +108,13 @@ impl Parser {
             if let Ok(command) = self.parse_command() {
                 commands.push(command);
             } else {
-                break;
+                // Print debug info when parsing fails
+                println!("Failed to parse command, parsed {} commands so far, remaining tokens: {:?}", commands.len(), self.tokens);
+                // Don't break, try to continue parsing
+                // Skip the problematic token and continue
+                if !self.tokens.is_empty() {
+                    println!("Skipping token: {:?}", self.tokens.pop_front());
+                }
             }
         }
         Ok(commands)
@@ -117,6 +123,7 @@ impl Parser {
     fn parse_command(&mut self) -> Result<Command, ParseError> {
         self.expect_token(Token::LParen)?;
         let command_name = self.parse_symbol()?;
+
 
         let command = match command_name.as_str() {
             "datatype" => self.parse_datatype()?,
@@ -128,6 +135,8 @@ impl Parser {
             "push" => self.parse_push()?,
             "pop" => self.parse_pop()?,
             "run" => self.parse_run()?,
+            "sort" => self.parse_sort()?,
+            "ruleset" => self.parse_ruleset()?,
             _ => {
                 // For unsupported commands, create a simple action
                 let expr = self.parse_expr()?;
@@ -183,14 +192,22 @@ impl Parser {
     }
 
     fn parse_schema(&mut self) -> Result<Schema, ParseError> {
-        self.expect_token(Token::LParen)?;
         let mut inputs = Vec::new();
 
-        while self.peek_token() != Some(&Token::RParen) {
-            inputs.push(self.parse_symbol()?);
+        // Check if inputs are in parentheses
+        if self.peek_token() == Some(&Token::LParen) {
+            self.expect_token(Token::LParen)?;
+            while self.peek_token() != Some(&Token::RParen) {
+                inputs.push(self.parse_symbol()?);
+            }
+            self.expect_token(Token::RParen)?;
+        } else {
+            // Parse inputs without parentheses
+            while self.peek_token() != Some(&Token::RParen) {
+                inputs.push(self.parse_symbol()?);
+            }
         }
 
-        self.expect_token(Token::RParen)?;
         let output = self.parse_symbol()?;
 
         Ok(Schema { input: inputs, output })
@@ -225,9 +242,32 @@ impl Parser {
     fn parse_rewrite(&mut self) -> Result<Command, ParseError> {
         let lhs = self.parse_expr()?;
         let rhs = self.parse_expr()?;
+        let mut ruleset = "default".to_string();
+
+        // Parse optional keyword arguments
+        while matches!(self.peek_token(), Some(Token::Keyword(_))) {
+            let keyword = self.parse_symbol()?;
+            match keyword.as_str() {
+                "ruleset" => {
+                    ruleset = self.parse_symbol()?;
+                }
+                "when" => {
+                    // Skip when conditions for now
+                    self.expect_token(Token::LParen)?;
+                    while self.peek_token() != Some(&Token::RParen) {
+                        self.tokens.pop_front();
+                    }
+                    self.expect_token(Token::RParen)?;
+                }
+                _ => {
+                    // Skip unknown keywords
+                    self.tokens.pop_front();
+                }
+            }
+        }
 
         Ok(Command::Rewrite(
-            "default".to_string(),
+            ruleset,
             Rewrite {
                 span: Span::new(self.current_file.clone(), 1, 1),
                 lhs,
@@ -285,6 +325,39 @@ impl Parser {
             Span::new(self.current_file.clone(), 1, 1),
             Expr::Lit(Span::new(self.current_file.clone(), 1, 1), Literal::Int(n)),
         )))
+    }
+
+    fn parse_sort(&mut self) -> Result<Command, ParseError> {
+        let name = self.parse_symbol()?;
+
+        // Check if there are additional parameters
+        if self.peek_token() == Some(&Token::LParen) {
+            // For now, skip the type specification and just parse as simple sort
+            // This handles cases like: (sort UnstableFn_Int_Int (UnstableFn (Int) Int))
+            while self.peek_token() != Some(&Token::RParen) {
+                self.tokens.pop_front(); // Skip tokens until closing paren
+            }
+            self.expect_token(Token::RParen)?;
+            Ok(Command::Sort(
+                Span::new(self.current_file.clone(), 1, 1),
+                name,
+                None,
+            ))
+        } else {
+            Ok(Command::Sort(
+                Span::new(self.current_file.clone(), 1, 1),
+                name,
+                None,
+            ))
+        }
+    }
+
+    fn parse_ruleset(&mut self) -> Result<Command, ParseError> {
+        let name = self.parse_symbol()?;
+        Ok(Command::AddRuleset(
+            Span::new(self.current_file.clone(), 1, 1),
+            name,
+        ))
     }
 
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
@@ -367,6 +440,27 @@ impl ParseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_debug_stresstest() {
+        let input = r#"(rewrite (TupleInt_single __var__i) (TupleInt___init__ (Int___init__ 1) (unstable-fn "cast_Callable__Int__Int___Int___lambda_i_____i_" __var__i)) :ruleset array_api_ruleset)"#;
+        let mut parser = Parser::new();
+
+        println!("Input: {}", input);
+
+        match parser.get_program_from_string(None, input) {
+            Ok(commands) => {
+                println!("Success! Parsed {} commands", commands.len());
+                for cmd in commands {
+                    println!("  Command: {:?}", cmd);
+                }
+            }
+            Err(e) => {
+                println!("Error: {}", e);
+                println!("Remaining tokens: {:?}", parser.tokens);
+            }
+        }
+    }
 
     #[test]
     fn test_parse_all_egg_files() {

@@ -17,6 +17,8 @@ pub struct DslType {
 pub struct DslVariant {
     pub name: String,
     pub fields: Vec<DslField>,
+    pub source_file: Option<String>,
+    pub source_line: Option<usize>,
 }
 
 /// Eggplant DSL field definition
@@ -92,6 +94,14 @@ pub enum EggplantCommand {
     },
 }
 
+/// Eggplant command with source file information
+#[derive(Debug, Clone, PartialEq)]
+pub struct EggplantCommandWithSource {
+    pub command: EggplantCommand,
+    pub source_file: Option<String>,
+    pub source_line: Option<usize>,
+}
+
 /// Eggplant code generator
 pub struct EggplantCodeGenerator {
     output: String,
@@ -111,18 +121,19 @@ impl EggplantCodeGenerator {
     }
 
     /// Generate Rust code with eggplant macros
-    pub fn generate_rust(&mut self, commands: &[EggplantCommand]) -> String {
+    pub fn generate_rust(&mut self, commands: &[EggplantCommandWithSource]) -> String {
         self.output.clear();
 
         self.add_line("// Generated Eggplant Rust Code");
+        self.add_line("// Source files referenced in comments below");
         self.add_line("use eggplant::{{prelude::*, tx_rx_vt_pr}};");
         self.add_line("");
 
         // Generate type definitions (outside main)
-        for command in commands {
-            match command {
+        for cmd_with_source in commands {
+            match &cmd_with_source.command {
                 EggplantCommand::DslType(_) | EggplantCommand::PatternVars(_) => {
-                    self.generate_rust_command(command);
+                    self.generate_rust_command_with_source(cmd_with_source);
                 }
                 _ => {}
             }
@@ -133,13 +144,13 @@ impl EggplantCodeGenerator {
         self.indent();
 
         // Generate runtime commands (inside main)
-        for command in commands {
-            match command {
+        for cmd_with_source in commands {
+            match &cmd_with_source.command {
                 EggplantCommand::DslType(_) | EggplantCommand::PatternVars(_) => {
                     // Skip type definitions (already generated above)
                 }
                 _ => {
-                    self.generate_rust_command(command);
+                    self.generate_rust_command_with_source(cmd_with_source);
                 }
             }
         }
@@ -201,15 +212,28 @@ impl EggplantCodeGenerator {
         self.output.clone()
     }
 
-    fn generate_rust_command(&mut self, command: &EggplantCommand) {
-        match command {
+    fn generate_rust_command_with_source(&mut self, cmd_with_source: &EggplantCommandWithSource) {
+        // Add source file comment if available
+        if let (Some(file), Some(line)) = (&cmd_with_source.source_file, cmd_with_source.source_line) {
+            self.add_line(&format!("// Source: {}:{}", file, line));
+        }
+
+        match &cmd_with_source.command {
             EggplantCommand::DslType(dsl_type) => {
+                self.add_line(&format!("// Datatype '{}' defined with variants:", dsl_type.name));
+                for variant in &dsl_type.variants {
+                    if let (Some(file), Some(line)) = (&variant.source_file, variant.source_line) {
+                        self.add_line(&format!("//   - {}: variant (defined at {}:{})", variant.name, file, line));
+                    } else {
+                        self.add_line(&format!("//   - {}: variant", variant.name));
+                    }
+                }
                 self.add_line(&format!("#[eggplant::dsl]"));
                 self.add_line(&format!("enum {} {{", dsl_type.name));
                 self.indent();
                 for variant in &dsl_type.variants {
                     if variant.fields.is_empty() {
-                        self.add_line(&format!("{}, {{}}", variant.name));
+                        self.add_line(&format!("{} {{}},", variant.name));
                     } else {
                         self.add_line(&format!("{} {{ ", variant.name));
                         for field in &variant.fields {
@@ -223,6 +247,9 @@ impl EggplantCodeGenerator {
                 self.add_line("");
             }
             EggplantCommand::PatternVars(pattern_vars) => {
+                self.add_line(&format!("// Pattern variables for rule matching"));
+                let var_names: Vec<String> = pattern_vars.variables.iter().map(|v| v.name.clone()).collect();
+                self.add_line(&format!("// Variables: {}", var_names.join(", ")));
                 self.add_line(&format!("#[eggplant::pat_vars]"));
                 self.add_line(&format!("struct {} {{", pattern_vars.name));
                 self.indent();
@@ -234,6 +261,7 @@ impl EggplantCodeGenerator {
                 self.add_line("");
             }
             EggplantCommand::Rule(rule) => {
+                self.add_line(&format!("// Rule: {}", rule.name));
                 self.add_line(&format!("MyTx::add_rule("));
                 self.indent();
                 self.add_line(&format!("\"{}\",", rule.name));
@@ -437,10 +465,10 @@ impl EggplantCodeGenerator {
                 Literal::Bool(b) => b.to_string(),
                 Literal::Unit => "()".to_string(),
             },
-            Expr::Var(_, var) => var.clone(),
+            Expr::Var(_, var) => normalize_identifier(var),
             Expr::Call(_, func, args) => {
                 let arg_str = args.iter().map(|a| self.expr_to_string(a)).collect::<Vec<_>>().join(", ");
-                format!("{}({})", func, arg_str)
+                format!("{}({})", normalize_identifier(func), arg_str)
             }
         }
     }
@@ -479,39 +507,54 @@ impl EggplantCodeGenerator {
     }
 }
 
-/// Convert egglog commands to eggplant commands
-pub fn convert_to_eggplant(commands: &[Command]) -> Vec<EggplantCommand> {
+/// Convert egglog commands to eggplant commands with source information
+pub fn convert_to_eggplant_with_source(commands: &[Command], source_file: Option<String>) -> Vec<EggplantCommandWithSource> {
     let mut eggplant_commands = Vec::new();
 
     // Add transaction definition
-    eggplant_commands.push(EggplantCommand::Transaction("MyTx".to_string()));
+    eggplant_commands.push(EggplantCommandWithSource {
+        command: EggplantCommand::Transaction("MyTx".to_string()),
+        source_file: source_file.clone(),
+        source_line: Some(1),
+    });
 
-    // First pass: collect all constructors for each datatype
+    // First pass: collect all constructors for each datatype/sort with source info
     let mut datatype_constructors: HashMap<String, Vec<DslVariant>> = HashMap::new();
+    let mut constructor_line_numbers: HashMap<String, usize> = HashMap::new();
+    let mut constructor_counter = 1;
 
     for command in commands {
+        constructor_counter += 1;
         if let Command::Constructor { name, schema, .. } = command {
-            // Extract the datatype name from the schema output
+            // Extract the datatype/sort name from the schema output
             let datatype_name = &schema.output;
 
             let dsl_variant = DslVariant {
-                name: name.clone(),
+                name: normalize_identifier(name),
                 fields: schema.input.iter().enumerate().map(|(i, field_type)| {
                     DslField {
                         name: format!("arg{}", i),
-                        field_type: field_type.clone(),
+                        field_type: normalize_identifier(field_type),
                     }
                 }).collect(),
+                source_file: source_file.clone(),
+                source_line: Some(constructor_counter),
             };
 
+            constructor_line_numbers.insert(name.clone(), constructor_counter);
+
             datatype_constructors
-                .entry(datatype_name.clone())
+                .entry(normalize_identifier(datatype_name))
                 .or_insert_with(Vec::new)
                 .push(dsl_variant);
         }
     }
 
+    let mut line_counter = 1;
+
     for command in commands {
+        line_counter += 1;
+
         match command {
             Command::Datatype { name, .. } => {
                 // Use the collected constructors for this datatype
@@ -520,40 +563,57 @@ pub fn convert_to_eggplant(commands: &[Command]) -> Vec<EggplantCommand> {
                     .cloned()
                     .unwrap_or_else(Vec::new);
 
-                eggplant_commands.push(EggplantCommand::DslType(DslType {
-                    name: name.clone(),
-                    variants: dsl_variants,
-                }));
+                eggplant_commands.push(EggplantCommandWithSource {
+                    command: EggplantCommand::DslType(DslType {
+                        name: normalize_identifier(name),
+                        variants: dsl_variants,
+                    }),
+                    source_file: source_file.clone(),
+                    source_line: Some(line_counter),
+                });
             }
             Command::Function { name, schema, .. } => {
                 // Create pattern variables for function - these are the matched nodes
                 let pattern_vars = PatternVars {
-                    name: format!("{}Pat", name),
+                    name: format!("{}Pat", normalize_identifier(name)),
                     variables: schema.input.iter().enumerate().map(|(i, typ)| {
                         PatternVariable {
                             name: format!("arg{}", i),
-                            var_type: typ.clone(),
+                            var_type: normalize_identifier(typ),
                         }
                     }).collect(),
                 };
 
-                eggplant_commands.push(EggplantCommand::PatternVars(pattern_vars));
+                eggplant_commands.push(EggplantCommandWithSource {
+                    command: EggplantCommand::PatternVars(pattern_vars),
+                    source_file: source_file.clone(),
+                    source_line: Some(line_counter),
+                });
 
                 // Create rule for function
                 let rule = EggplantRule {
-                    name: format!("{}_rule", name),
-                    pattern_query: format!("// TODO: implement pattern query for {}", name),
-                    action: format!("// TODO: implement {} action", name),
+                    name: format!("{}_rule", normalize_identifier(name)),
+                    pattern_query: format!("// TODO: implement pattern query for {}", normalize_identifier(name)),
+                    action: format!("// TODO: implement {} action", normalize_identifier(name)),
                     ruleset: "default_ruleset".to_string(),
                 };
 
-                eggplant_commands.push(EggplantCommand::Rule(rule));
+                eggplant_commands.push(EggplantCommandWithSource {
+                    command: EggplantCommand::Rule(rule),
+                    source_file: source_file.clone(),
+                    source_line: Some(line_counter),
+                });
             }
             Command::Rule { name, rule, .. } => {
                 // For rules, we need to analyze the pattern to determine what nodes are matched
                 // For now, create a simple pattern with generic nodes
+                let unique_name = if name == "default" {
+                    format!("rule_{}", line_counter)
+                } else {
+                    normalize_identifier(name)
+                };
                 let pattern_vars = PatternVars {
-                    name: format!("{}Pat", name),
+                    name: format!("{}Pat", unique_name),
                     variables: vec![
                         PatternVariable {
                             name: "l".to_string(),
@@ -565,58 +625,83 @@ pub fn convert_to_eggplant(commands: &[Command]) -> Vec<EggplantCommand> {
                         },
                         PatternVariable {
                             name: "p".to_string(),
-                            var_type: name.clone(),
+                            var_type: normalize_identifier(name),
                         },
                     ],
                 };
 
-                eggplant_commands.push(EggplantCommand::PatternVars(pattern_vars));
+                eggplant_commands.push(EggplantCommandWithSource {
+                    command: EggplantCommand::PatternVars(pattern_vars),
+                    source_file: source_file.clone(),
+                    source_line: Some(line_counter),
+                });
 
                 // Create rule with proper pattern query
                 let pattern_query = format!(
                     "let l = Expr::query_leaf();\nlet r = Expr::query_leaf();\nlet p = {}::query(&l, &r);\n{}Pat::new(l, r, p)",
-                    name, name
+                    name, unique_name
                 );
 
                 let action = format!(
                     "// TODO: implement action for {}\nlet result = ctx.insert_expr(/* calculation */);\nctx.union(p, result);",
-                    name
+                    unique_name
                 );
 
                 let eggplant_rule = EggplantRule {
-                    name: name.clone(),
+                    name: unique_name.clone(),
                     pattern_query,
                     action,
                     ruleset: "default_ruleset".to_string(),
                 };
 
-                eggplant_commands.push(EggplantCommand::Rule(eggplant_rule));
+                eggplant_commands.push(EggplantCommandWithSource {
+                    command: EggplantCommand::Rule(eggplant_rule),
+                    source_file: source_file.clone(),
+                    source_line: Some(line_counter),
+                });
             }
             Command::Rewrite(name, rewrite, _) => {
                 // Analyze the rewrite pattern to extract variables and structure
-                let (pattern_vars, pattern_query) = analyze_rewrite_pattern(&rewrite.lhs, &name);
+                let unique_name = if name == "default" {
+                    format!("rule_{}", line_counter)
+                } else {
+                    normalize_identifier(name)
+                };
+                let (pattern_vars, pattern_query) = analyze_rewrite_pattern(&rewrite.lhs, &unique_name);
 
                 // Create pattern variables
-                eggplant_commands.push(EggplantCommand::PatternVars(pattern_vars));
+                eggplant_commands.push(EggplantCommandWithSource {
+                    command: EggplantCommand::PatternVars(pattern_vars),
+                    source_file: source_file.clone(),
+                    source_line: Some(line_counter),
+                });
 
                 // Create rule with pattern query and action
-                let action = generate_rewrite_action(&rewrite.rhs, &name);
+                let action = generate_rewrite_action(&rewrite.rhs, &unique_name);
 
                 let rule = EggplantRule {
-                    name: name.clone(),
+                    name: unique_name.clone(),
                     pattern_query,
                     action,
                     ruleset: "default_ruleset".to_string(),
                 };
 
-                eggplant_commands.push(EggplantCommand::Rule(rule));
+                eggplant_commands.push(EggplantCommandWithSource {
+                    command: EggplantCommand::Rule(rule),
+                    source_file: source_file.clone(),
+                    source_line: Some(line_counter),
+                });
             }
             Command::Check(_, facts) => {
                 for fact in facts {
                     if let Fact::Eq(_, e1, e2) = fact {
-                        eggplant_commands.push(EggplantCommand::Assert {
-                            expr: e1.clone(),
-                            expected: e2.clone(),
+                        eggplant_commands.push(EggplantCommandWithSource {
+                            command: EggplantCommand::Assert {
+                                expr: e1.clone(),
+                                expected: e2.clone(),
+                            },
+                            source_file: source_file.clone(),
+                            source_line: Some(line_counter),
                         });
                     }
                 }
@@ -628,17 +713,46 @@ pub fn convert_to_eggplant(commands: &[Command]) -> Vec<EggplantCommand> {
             }
             Command::Action(action) => {
                 if let Action::Let(_, var, expr) = action {
-                    eggplant_commands.push(EggplantCommand::Let {
-                        var: var.clone(),
-                        expr: expr.clone(),
+                    eggplant_commands.push(EggplantCommandWithSource {
+                        command: EggplantCommand::Let {
+                            var: normalize_identifier(var),
+                            expr: expr.clone(),
+                        },
+                        source_file: source_file.clone(),
+                        source_line: Some(line_counter),
                     });
                 }
             }
             Command::Push(_) => {
-                eggplant_commands.push(EggplantCommand::Commit("current_expr".to_string()));
+                eggplant_commands.push(EggplantCommandWithSource {
+                    command: EggplantCommand::Commit("current_expr".to_string()),
+                    source_file: source_file.clone(),
+                    source_line: Some(line_counter),
+                });
             }
             Command::Pop(_, _) => {
-                eggplant_commands.push(EggplantCommand::Pull("current_expr".to_string()));
+                eggplant_commands.push(EggplantCommandWithSource {
+                    command: EggplantCommand::Pull("current_expr".to_string()),
+                    source_file: source_file.clone(),
+                    source_line: Some(line_counter),
+                });
+            }
+            Command::Sort(_, name, _) => {
+                // Sort command defines a basic type
+                // Use the collected constructors for this sort
+                let dsl_variants = datatype_constructors
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(Vec::new);
+
+                eggplant_commands.push(EggplantCommandWithSource {
+                    command: EggplantCommand::DslType(DslType {
+                        name: normalize_identifier(name),
+                        variants: dsl_variants,
+                    }),
+                    source_file: source_file.clone(),
+                    source_line: Some(line_counter),
+                });
             }
             _ => {
                 // Skip unsupported commands for now
@@ -647,34 +761,144 @@ pub fn convert_to_eggplant(commands: &[Command]) -> Vec<EggplantCommand> {
     }
 
     // Add ruleset and run commands
-    eggplant_commands.push(EggplantCommand::Ruleset("default_ruleset".to_string()));
-    eggplant_commands.push(EggplantCommand::RunRuleset("MyTx".to_string(), "Sat".to_string()));
+    eggplant_commands.push(EggplantCommandWithSource {
+        command: EggplantCommand::Ruleset("default_ruleset".to_string()),
+        source_file: source_file.clone(),
+        source_line: Some(line_counter),
+    });
+    eggplant_commands.push(EggplantCommandWithSource {
+        command: EggplantCommand::RunRuleset("MyTx".to_string(), "Sat".to_string()),
+        source_file: source_file.clone(),
+        source_line: Some(line_counter),
+    });
 
     eggplant_commands
 }
 
-/// Analyze a rewrite pattern to extract pattern variables and generate pattern query
-fn analyze_rewrite_pattern(lhs: &Expr, rule_name: &str) -> (PatternVars, String) {
+/// Normalize identifier by replacing invalid characters with underscores
+fn normalize_identifier(identifier: &str) -> String {
+    identifier
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Infer type from expression context
+fn infer_type_from_expr(expr: &Expr) -> String {
+    match expr {
+        Expr::Call(_, func_name, _) => normalize_identifier(func_name),
+        Expr::Var(_, _) => "Expr".to_string(), // Default type for variables
+        Expr::Lit(_, lit) => match lit {
+            Literal::Int(_) => "i64".to_string(),
+            Literal::Float(_) => "f64".to_string(),
+            Literal::String(_) => "String".to_string(),
+            Literal::Bool(_) => "bool".to_string(),
+            Literal::Unit => "()".to_string(),
+        },
+    }
+}
+
+/// Generate better pattern query with type inference
+fn generate_pattern_query(lhs: &Expr, rule_name: &str) -> (PatternVars, String) {
     let mut variables = Vec::new();
     let mut pattern_query_parts = Vec::new();
+    let mut node_counter = 0;
 
-    // Extract variables from the left-hand side pattern
-    extract_variables_from_expr(lhs, &mut variables, &mut pattern_query_parts, 0);
+    // Extract variables with better type inference
+    extract_variables_with_types(lhs, &mut variables, &mut pattern_query_parts, &mut node_counter);
 
     // Create pattern variables struct
     let pattern_vars = PatternVars {
         name: format!("{}Pat", rule_name),
-        variables,
+        variables: variables.clone(),
     };
 
-    // Generate pattern query
+    // Generate improved pattern query
     let pattern_query = if pattern_query_parts.is_empty() {
         format!("// TODO: implement pattern query for {}", rule_name)
     } else {
-        pattern_query_parts.join("\n")
+        let mut query = pattern_query_parts.join("\n");
+        query.push_str(&format!("\n{}Pat::new(", rule_name));
+
+        // Add variable references
+        let var_refs: Vec<String> = variables.iter().map(|v| v.name.clone()).collect();
+        query.push_str(&var_refs.join(", "));
+        query.push(')');
+        query
     };
 
     (pattern_vars, pattern_query)
+}
+
+/// Extract variables with type inference
+fn extract_variables_with_types(expr: &Expr, variables: &mut Vec<PatternVariable>, pattern_query_parts: &mut Vec<String>, node_counter: &mut usize) {
+    match expr {
+        Expr::Var(_, var_name) => {
+            // Variable reference - add to pattern variables with inferred type
+            if !variables.iter().any(|v| v.name == *var_name) {
+                variables.push(PatternVariable {
+                    name: var_name.clone(),
+                    var_type: infer_type_from_expr(expr),
+                });
+                pattern_query_parts.push(format!("let {} = Expr::query_leaf();", var_name));
+            }
+        }
+        Expr::Call(_, func_name, args) => {
+            // Function call - extract variables from arguments
+            for arg in args {
+                extract_variables_with_types(arg, variables, pattern_query_parts, node_counter);
+            }
+
+            // Add pattern query for the function call with better naming
+            let arg_refs: Vec<String> = args.iter().map(|arg| {
+                match arg {
+                    Expr::Var(_, name) => format!("&{}", name),
+                    Expr::Call(_, sub_func, _) => {
+                        // For nested calls, use the sub-node with counter
+                        *node_counter += 1;
+                        format!("&{}_node{}", normalize_identifier(&sub_func.to_lowercase()), node_counter)
+                    }
+                    Expr::Lit(_, lit) => {
+                        // For literals, insert them directly
+                        match lit {
+                            Literal::Int(i) => i.to_string(),
+                            Literal::Float(f) => f.0.to_string(),
+                            Literal::String(s) => format!("\"{}\"", s),
+                            Literal::Bool(b) => b.to_string(),
+                            Literal::Unit => "()".to_string(),
+                        }
+                    }
+                }
+            }).collect();
+
+            *node_counter += 1;
+            pattern_query_parts.push(format!("let {}_node{} = {}::query({});",
+                normalize_identifier(&func_name.to_lowercase()), node_counter,
+                normalize_identifier(func_name), arg_refs.join(", ")));
+        }
+        Expr::Lit(_, _) => {
+            // Literal - no variables to extract
+        }
+    }
+}
+
+/// Convert egglog commands to eggplant commands (backward compatibility)
+pub fn convert_to_eggplant(commands: &[Command]) -> Vec<EggplantCommand> {
+    convert_to_eggplant_with_source(commands, None)
+        .into_iter()
+        .map(|cmd_with_source| cmd_with_source.command)
+        .collect()
+}
+
+/// Analyze a rewrite pattern to extract pattern variables and generate pattern query
+fn analyze_rewrite_pattern(lhs: &Expr, rule_name: &str) -> (PatternVars, String) {
+    generate_pattern_query(lhs, rule_name)
 }
 
 /// Extract variables from an expression and build pattern query
@@ -702,7 +926,7 @@ fn extract_variables_from_expr(expr: &Expr, variables: &mut Vec<PatternVariable>
                     Expr::Var(_, name) => format!("&{}", name),
                     Expr::Call(_, sub_func, _) => {
                         // For nested calls, use the sub-node
-                        format!("&{}_node", sub_func.to_lowercase())
+                        format!("&{}_node", normalize_identifier(&sub_func.to_lowercase()))
                     }
                     Expr::Lit(_, lit) => {
                         // For literals, insert them directly
@@ -718,7 +942,7 @@ fn extract_variables_from_expr(expr: &Expr, variables: &mut Vec<PatternVariable>
             }).collect();
 
             pattern_query_parts.push(format!("let {}_node = {}::query({});",
-                func_name.to_lowercase(), func_name, arg_refs.join(", ")));
+                normalize_identifier(&func_name.to_lowercase()), normalize_identifier(func_name), arg_refs.join(", ")));
         }
         Expr::Lit(_, _) => {
             // Literal - no variables to extract
@@ -731,16 +955,18 @@ fn generate_rewrite_action(rhs: &Expr, rule_name: &str) -> String {
     match rhs {
         Expr::Var(_, var_name) => {
             // Simple variable reference
-            format!("ctx.union(pat.{}_node, pat.{});", rule_name.to_lowercase(), var_name)
+            format!("ctx.union(pat.{}_node1, pat.{});", rule_name.to_lowercase(), var_name)
         }
         Expr::Call(_, func_name, args) => {
             // Function call - generate action to create new node
+            let mut node_counter = 1;
             let arg_refs: Vec<String> = args.iter().map(|arg| {
                 match arg {
                     Expr::Var(_, name) => format!("pat.{}", name),
                     Expr::Call(_, sub_func, _) => {
-                        // For nested calls, use the sub-node
-                        format!("pat.{}_node", sub_func.to_lowercase())
+                        // For nested calls, use the sub-node with counter
+                        node_counter += 1;
+                        format!("pat.{}_node{}", normalize_identifier(&sub_func.to_lowercase()), node_counter)
                     }
                     Expr::Lit(_, lit) => {
                         match lit {
@@ -754,8 +980,8 @@ fn generate_rewrite_action(rhs: &Expr, rule_name: &str) -> String {
                 }
             }).collect();
 
-            format!("let result = {}::new({});\nctx.union(pat.{}_node, result);",
-                func_name, arg_refs.join(", "), rule_name.to_lowercase())
+            format!("let result = {}::new({});\nctx.union(pat.{}_node1, result);",
+                normalize_identifier(func_name), arg_refs.join(", "), normalize_identifier(&rule_name.to_lowercase()))
         }
         Expr::Lit(_, lit) => {
             // Literal value
@@ -766,7 +992,7 @@ fn generate_rewrite_action(rhs: &Expr, rule_name: &str) -> String {
                 Literal::Bool(b) => b.to_string(),
                 Literal::Unit => "()".to_string(),
             };
-            format!("let result = ctx.insert_literal({});\nctx.union(pat.{}_node, result);", value, rule_name.to_lowercase())
+            format!("let result = ctx.insert_literal({});\nctx.union(pat.{}_node1, result);", value, normalize_identifier(&rule_name.to_lowercase()))
         }
     }
 }
@@ -804,54 +1030,70 @@ mod tests {
     #[test]
     fn test_rust_generation() {
         let commands = vec![
-            EggplantCommand::DslType(DslType {
-                name: "Math".to_string(),
-                variants: vec![
-                    DslVariant {
-                        name: "Num".to_string(),
-                        fields: vec![DslField {
-                            name: "num".to_string(),
-                            field_type: "i64".to_string(),
-                        }],
-                    },
-                    DslVariant {
-                        name: "Add".to_string(),
-                        fields: vec![
-                            DslField {
-                                name: "l".to_string(),
-                                field_type: "Math".to_string(),
-                            },
-                            DslField {
-                                name: "r".to_string(),
-                                field_type: "Math".to_string(),
-                            },
-                        ],
-                    },
-                ],
-            }),
-            EggplantCommand::PatternVars(PatternVars {
-                name: "AddPat".to_string(),
-                variables: vec![
-                    PatternVariable {
-                        name: "l".to_string(),
-                        var_type: "Num".to_string(),
-                    },
-                    PatternVariable {
-                        name: "r".to_string(),
-                        var_type: "Num".to_string(),
-                    },
-                    PatternVariable {
-                        name: "p".to_string(),
-                        var_type: "Add".to_string(),
-                    },
-                ],
-            }),
-            EggplantCommand::Rule(EggplantRule {
-                name: "add_rule".to_string(),
-                pattern_query: "let l = Num::query();\nlet r = Num::query();\nlet p = Add::query(&l, &r);\nAddPat::new(l, r, p)".to_string(),
-                action: "let cal = ctx.devalue(l.num) + ctx.devalue(r.num);\nlet add_value = ctx.insert_num(cal);\nctx.union(p, add_value);".to_string(),
-                ruleset: "default_ruleset".to_string(),
-            }),
+            EggplantCommandWithSource {
+                command: EggplantCommand::DslType(DslType {
+                    name: "Math".to_string(),
+                    variants: vec![
+                        DslVariant {
+                            name: "Num".to_string(),
+                            fields: vec![DslField {
+                                name: "num".to_string(),
+                                field_type: "i64".to_string(),
+                            }],
+                            source_file: Some("test.egg".to_string()),
+                            source_line: Some(1),
+                        },
+                        DslVariant {
+                            name: "Add".to_string(),
+                            fields: vec![
+                                DslField {
+                                    name: "l".to_string(),
+                                    field_type: "Math".to_string(),
+                                },
+                                DslField {
+                                    name: "r".to_string(),
+                                    field_type: "Math".to_string(),
+                                },
+                            ],
+                            source_file: Some("test.egg".to_string()),
+                            source_line: Some(2),
+                        },
+                    ],
+                }),
+                source_file: Some("test.egg".to_string()),
+                source_line: Some(1),
+            },
+            EggplantCommandWithSource {
+                command: EggplantCommand::PatternVars(PatternVars {
+                    name: "AddPat".to_string(),
+                    variables: vec![
+                        PatternVariable {
+                            name: "l".to_string(),
+                            var_type: "Num".to_string(),
+                        },
+                        PatternVariable {
+                            name: "r".to_string(),
+                            var_type: "Num".to_string(),
+                        },
+                        PatternVariable {
+                            name: "p".to_string(),
+                            var_type: "Add".to_string(),
+                        },
+                    ],
+                }),
+                source_file: Some("test.egg".to_string()),
+                source_line: Some(2),
+            },
+            EggplantCommandWithSource {
+                command: EggplantCommand::Rule(EggplantRule {
+                    name: "add_rule".to_string(),
+                    pattern_query: "let l = Num::query();\nlet r = Num::query();\nlet p = Add::query(&l, &r);\nAddPat::new(l, r, p)".to_string(),
+                    action: "let cal = ctx.devalue(l.num) + ctx.devalue(r.num);\nlet add_value = ctx.insert_num(cal);\nctx.union(p, add_value);".to_string(),
+                    ruleset: "default_ruleset".to_string(),
+                }),
+                source_file: Some("test.egg".to_string()),
+                source_line: Some(3),
+            },
         ];
 
         let mut codegen = EggplantCodeGenerator::new();
@@ -875,6 +1117,8 @@ mod tests {
                         name: "num".to_string(),
                         field_type: "i64".to_string(),
                     }],
+                    source_file: Some("test.egg".to_string()),
+                    source_line: Some(1),
                 }],
             }),
             EggplantCommand::Assert {
@@ -909,10 +1153,14 @@ mod tests {
                     DslVariant {
                         name: "True".to_string(),
                         fields: vec![],
+                        source_file: Some("test.egg".to_string()),
+                        source_line: Some(1),
                     },
                     DslVariant {
                         name: "False".to_string(),
                         fields: vec![],
+                        source_file: Some("test.egg".to_string()),
+                        source_line: Some(1),
                     },
                 ],
             }),

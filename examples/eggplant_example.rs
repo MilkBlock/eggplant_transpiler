@@ -11,144 +11,147 @@ use std::fs;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Eggplant Code Generation Example ===");
 
-    // Parse calc.egg and convert to eggplant
-    println!("\n1. Parsing calc.egg and converting to eggplant...");
-    let calc_content = fs::read_to_string("examples/calc.egg")?;
+    // Traverse all .egg files in examples folder
+    println!("\n1. Traversing .egg files in examples folder...");
     let mut parser = Parser::default();
-    let calc_commands = parser.get_program_from_string(Some("calc.egg".to_string()), &calc_content)?;
-    let eggplant_commands = convert_to_eggplant(&calc_commands);
-
-    println!("Converted {} egglog commands to {} eggplant commands",
-        calc_commands.len(), eggplant_commands.len());
-
-    // Generate Rust code
-    println!("\n2. Generating Rust code...");
     let mut rust_gen = EggplantCodeGenerator::new();
-    let rust_code = rust_gen.generate_rust(&eggplant_commands);
-    println!("Generated {} lines of Rust code", rust_code.lines().count());
+    let mut generated_files = Vec::new();
 
-    // Parse bool.egg and convert to eggplant
-    println!("\n4. Parsing bool.egg and converting to eggplant...");
-    let bool_content = fs::read_to_string("examples/bool.egg")?;
-    let bool_commands = parser.get_program_from_string(Some("bool.egg".to_string()), &bool_content)?;
-    let bool_eggplant = convert_to_eggplant(&bool_commands);
+    for entry in fs::read_dir("examples")? {
+        let entry = entry?;
+        let path = entry.path();
 
-    println!("Converted {} egglog commands to {} eggplant commands",
-        bool_commands.len(), bool_eggplant.len());
+        if path.extension().map_or(false, |ext| ext == "egg") {
+            let file_name = path.file_name().unwrap().to_string_lossy().to_string();
+            println!("\n=== Parsing {} ===", file_name);
 
-    // Generate Rust code for bool example
-    println!("\n5. Generating Rust code for bool example...");
-    let bool_rust = rust_gen.generate_rust(&bool_eggplant);
-    println!("Generated {} lines of Rust code", bool_rust.lines().count());
+            let content = fs::read_to_string(&path)?;
+            let commands = parser.get_program_from_string(Some(file_name.clone()), &content)?;
+            let eggplant_commands = convert_to_eggplant_with_source(&commands, Some(path.to_string_lossy().to_string()));
 
-    // Parse math.egg and convert to eggplant
-    println!("\n6. Parsing math.egg and converting to eggplant...");
-    let math_content = fs::read_to_string("examples/math.egg")?;
-    let math_commands = parser.get_program_from_string(Some("math.egg".to_string()), &math_content)?;
-    let math_eggplant = convert_to_eggplant(&math_commands);
+            println!("Converted {} egglog commands to {} eggplant commands",
+                commands.len(), eggplant_commands.len());
 
-    println!("Converted {} egglog commands to {} eggplant commands",
-        math_commands.len(), math_eggplant.len());
+            let rust_code = rust_gen.generate_rust(&eggplant_commands);
+            println!("Generated {} lines of Rust code", rust_code.lines().count());
 
-    // Generate Rust code for math example
-    println!("\n7. Generating Rust code for math example...");
-    let math_rust = rust_gen.generate_rust(&math_eggplant);
-    println!("Generated {} lines of Rust code", math_rust.lines().count());
+            let output_file = format!("generated/eggplant/{}.rs", path.file_stem().unwrap().to_string_lossy());
+            fs::create_dir_all("generated/eggplant")?;
+            fs::write(&output_file, &rust_code)?;
 
-    // Save generated code to files
-    println!("\n8. Saving generated code to files...");
-
-    fs::create_dir_all("generated/eggplant")?;
-
-    fs::write("generated/eggplant/calc.rs", &rust_code)?;
-    fs::write("generated/eggplant/bool.rs", &bool_rust)?;
-    fs::write("generated/eggplant/math.rs", &math_rust)?;
+            generated_files.push(output_file);
+        }
+    }
 
     println!("\nGenerated files saved to:");
-    println!("  - generated/eggplant/calc.rs");
-    println!("  - generated/eggplant/bool.rs");
-    println!("  - generated/eggplant/math.rs");
+    for file in &generated_files {
+        println!("  - {}", file);
+    }
 
     // Demonstrate simple eggplant program
     println!("\n9. Demonstrating simple eggplant program...");
 
     let simple_commands = vec![
-        EggplantCommand::DslType(DslType {
-            name: "Math".to_string(),
-            variants: vec![
-                DslVariant {
-                    name: "Num".to_string(),
-                    fields: vec![DslField {
-                        name: "value".to_string(),
-                        field_type: "i64".to_string(),
-                    }],
-                },
-                DslVariant {
-                    name: "Add".to_string(),
-                    fields: vec![
-                        DslField {
-                            name: "left".to_string(),
-                            field_type: "Math".to_string(),
-                        },
-                        DslField {
-                            name: "right".to_string(),
-                            field_type: "Math".to_string(),
-                        },
-                    ],
-                },
-            ],
-        }),
-        EggplantCommand::PatternVars(PatternVars {
-            name: "AddPat".to_string(),
-            variables: vec![
-                PatternVariable {
-                    name: "l".to_string(),
-                    var_type: "Num".to_string(),
-                },
-                PatternVariable {
-                    name: "r".to_string(),
-                    var_type: "Num".to_string(),
-                },
-                PatternVariable {
-                    name: "p".to_string(),
-                    var_type: "Add".to_string(),
-                },
-            ],
-        }),
-        EggplantCommand::Rule(EggplantRule {
-            name: "add_rule".to_string(),
-            pattern_query: "let l = Num::query();\nlet r = Num::query();\nlet p = Add::query(&l, &r);\nAddPat::new(l, r, p)".to_string(),
-            action: "let cal = ctx.devalue(pat.l.num) + ctx.devalue(pat.r.num);\nlet add_value = ctx.insert_num(cal);\nctx.union(pat.p, add_value);".to_string(),
-            ruleset: "default_ruleset".to_string(),
-        }),
-        EggplantCommand::Rewrite {
-            name: "add_simplify".to_string(),
-            pattern: Expr::Call(
-                Span::new(None, 1, 1),
-                "Add".to_string(),
-                vec![
-                    Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
-                        vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(1))]),
-                    Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
-                        vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(2))])
-                ]
-            ),
-            replacement: Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
-                vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(3))]),
+        EggplantCommandWithSource {
+            command: EggplantCommand::DslType(DslType {
+                name: "Math".to_string(),
+                variants: vec![
+                    DslVariant {
+                        name: "Num".to_string(),
+                        fields: vec![DslField {
+                            name: "value".to_string(),
+                            field_type: "i64".to_string(),
+                        }],
+                        source_file: Some("examples/simple.egg".to_string()),
+                        source_line: Some(1),
+                    },
+                    DslVariant {
+                        name: "Add".to_string(),
+                        fields: vec![
+                            DslField {
+                                name: "left".to_string(),
+                                field_type: "Math".to_string(),
+                            },
+                            DslField {
+                                name: "right".to_string(),
+                                field_type: "Math".to_string(),
+                            },
+                        ],
+                        source_file: Some("examples/simple.egg".to_string()),
+                        source_line: Some(2),
+                    },
+                ],
+            }),
+            source_file: Some("examples/simple.egg".to_string()),
+            source_line: Some(1),
         },
-        EggplantCommand::Assert {
-            expr: Expr::Call(Span::new(None, 1, 1), "eval".to_string(),
-                vec![Expr::Call(Span::new(None, 1, 1), "Add".to_string(),
+        EggplantCommandWithSource {
+            command: EggplantCommand::PatternVars(PatternVars {
+                name: "AddPat".to_string(),
+                variables: vec![
+                    PatternVariable {
+                        name: "l".to_string(),
+                        var_type: "Num".to_string(),
+                    },
+                    PatternVariable {
+                        name: "r".to_string(),
+                        var_type: "Num".to_string(),
+                    },
+                    PatternVariable {
+                        name: "p".to_string(),
+                        var_type: "Add".to_string(),
+                    },
+                ],
+            }),
+            source_file: Some("examples/simple.egg".to_string()),
+            source_line: Some(2),
+        },
+        EggplantCommandWithSource {
+            command: EggplantCommand::Rule(EggplantRule {
+                name: "add_rule".to_string(),
+                pattern_query: "let l = Num::query();\nlet r = Num::query();\nlet p = Add::query(&l, &r);\nAddPat::new(l, r, p)".to_string(),
+                action: "let cal = ctx.devalue(pat.l.num) + ctx.devalue(pat.r.num);\nlet add_value = ctx.insert_num(cal);\nctx.union(pat.p, add_value);".to_string(),
+                ruleset: "default_ruleset".to_string(),
+            }),
+            source_file: Some("examples/simple.egg".to_string()),
+            source_line: Some(3),
+        },
+        EggplantCommandWithSource {
+            command: EggplantCommand::Rewrite {
+                name: "add_simplify".to_string(),
+                pattern: Expr::Call(
+                    Span::new(None, 1, 1),
+                    "Add".to_string(),
                     vec![
                         Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
                             vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(1))]),
                         Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
                             vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(2))])
                     ]
-                )]
-            ),
-            expected: Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
-                vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(3))]),
+                ),
+                replacement: Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
+                    vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(3))]),
+            },
+            source_file: Some("examples/simple.egg".to_string()),
+            source_line: Some(4),
+        },
+        EggplantCommandWithSource {
+            command: EggplantCommand::Assert {
+                expr: Expr::Call(Span::new(None, 1, 1), "eval".to_string(),
+                    vec![Expr::Call(Span::new(None, 1, 1), "Add".to_string(),
+                        vec![
+                            Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
+                                vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(1))]),
+                            Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
+                                vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(2))])
+                        ]
+                    )]
+                ),
+                expected: Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
+                    vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(3))]),
+            },
+            source_file: Some("examples/simple.egg".to_string()),
+            source_line: Some(5),
         },
     ];
 
@@ -176,7 +179,7 @@ mod tests {
             .get_program_from_string(Some("calc.egg".to_string()), &calc_content)
             .unwrap();
 
-        let eggplant_commands = convert_to_eggplant(&commands);
+        let eggplant_commands = convert_to_eggplant_with_source(&commands, Some("examples/calc.egg".to_string()));
         assert!(!eggplant_commands.is_empty());
 
         // Test code generation
@@ -190,22 +193,34 @@ mod tests {
     #[test]
     fn test_simple_eggplant_program() {
         let commands = vec![
-            EggplantCommand::DslType(DslType {
-                name: "Test".to_string(),
-                variants: vec![
-                    DslVariant {
-                        name: "A".to_string(),
-                        fields: vec![],
-                    },
-                    DslVariant {
-                        name: "B".to_string(),
-                        fields: vec![],
-                    },
-                ],
-            }),
-            EggplantCommand::Let {
-                var: "x".to_string(),
-                expr: Expr::Call(Span::new(None, 1, 1), "A".to_string(), vec![]),
+            EggplantCommandWithSource {
+                command: EggplantCommand::DslType(DslType {
+                    name: "Test".to_string(),
+                    variants: vec![
+                        DslVariant {
+                            name: "A".to_string(),
+                            fields: vec![],
+                            source_file: Some("test.egg".to_string()),
+                            source_line: Some(1),
+                        },
+                        DslVariant {
+                            name: "B".to_string(),
+                            fields: vec![],
+                            source_file: Some("test.egg".to_string()),
+                            source_line: Some(1),
+                        },
+                    ],
+                }),
+                source_file: Some("test.egg".to_string()),
+                source_line: Some(1),
+            },
+            EggplantCommandWithSource {
+                command: EggplantCommand::Let {
+                    var: "x".to_string(),
+                    expr: Expr::Call(Span::new(None, 1, 1), "A".to_string(), vec![]),
+                },
+                source_file: Some("test.egg".to_string()),
+                source_line: Some(2),
             },
         ];
 

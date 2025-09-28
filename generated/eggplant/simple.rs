@@ -1,6 +1,11 @@
 // Generated Eggplant Rust Code
+// Source files referenced in comments below
 use eggplant::{{prelude::*, tx_rx_vt_pr}};
 
+// Source: examples/simple.egg:1
+// Datatype 'Math' defined with variants:
+//   - Num: variant (defined at examples/simple.egg:1)
+//   - Add: variant (defined at examples/simple.egg:2)
 #[eggplant::dsl]
 enum Math {
     Num { 
@@ -12,6 +17,9 @@ enum Math {
     },
 }
 
+// Source: examples/simple.egg:2
+// Pattern variables for rule matching
+// Variables: l, r, p
 #[eggplant::pat_vars]
 struct AddPat {
     l: Num,
@@ -20,6 +28,8 @@ struct AddPat {
 }
 
 fn main() {
+    // Source: examples/simple.egg:3
+    // Rule: add_rule
     MyTx::add_rule(
         "add_rule",
         default_ruleset,
@@ -36,8 +46,10 @@ ctx.union(pat.p, add_value);
         },
     );
     
+    // Source: examples/simple.egg:4
     // Rewrite rule: add_simplify
     // Add(Num(1), Num(2)) => Num(3)
+    // Source: examples/simple.egg:5
     // Assert: eval(Add(Num(1), Num(2))) == Num(3)
     println!("Eggplant program executed successfully!");
 }

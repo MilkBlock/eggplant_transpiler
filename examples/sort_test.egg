@@ -1,0 +1,3 @@
+(sort Bool)
+(sort Int)
+(sort String)
