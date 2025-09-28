@@ -109,11 +109,11 @@ impl Parser {
                 commands.push(command);
             } else {
                 // Print debug info when parsing fails
-                println!("Failed to parse command, parsed {} commands so far, remaining tokens: {:?}", commands.len(), self.tokens);
+                log::debug!("Failed to parse command, parsed {} commands so far, remaining tokens: {:?}", commands.len(), self.tokens);
                 // Don't break, try to continue parsing
                 // Skip the problematic token and continue
                 if !self.tokens.is_empty() {
-                    println!("Skipping token: {:?}", self.tokens.pop_front());
+                    log::debug!("Skipping token: {:?}", self.tokens.pop_front());
                 }
             }
         }

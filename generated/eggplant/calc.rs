@@ -1,6 +1,7 @@
 // Generated Eggplant Rust Code
 // Source files referenced in comments below
 use eggplant::{{prelude::*, tx_rx_vt_pr}};
+use log::info;
 
 // Source: examples/calc.egg:2
 // Datatype 'G' defined with variants:
@@ -9,8 +10,8 @@ use eggplant::{{prelude::*, tx_rx_vt_pr}};
 //   - BConst: variant (defined at examples/calc.egg:7)
 //   - g_: variant (defined at examples/calc.egg:9)
 //   - inv: variant (defined at examples/calc.egg:10)
-//   - aConst: variant (defined at examples/calc.egg:21)
-//   - bConst: variant (defined at examples/calc.egg:22)
+//   - aConst: variant (defined at examples/calc.egg:22)
+//   - bConst: variant (defined at examples/calc.egg:23)
 #[eggplant::dsl]
 enum G {
     IConst {},
@@ -70,6 +71,7 @@ struct rule_16Pat {
 }
 
 fn main() {
+    env_logger::init();
     // Source: examples/calc.egg:1
     tx_rx_vt_pr!(MyTx, MyPatRec);
     
@@ -168,15 +170,19 @@ rule_16Pat::new(A)
     let A8 = g_(A4, A4);
     // Source: examples/calc.egg:20
     // Assert: g_(A4, A4) == g_(g_(A2, A2), g_(A2, A2))
-    // Source: examples/calc.egg:23
-    let a = aConst();
+    // Source: examples/calc.egg:21
+    // Assert: g_(g_(A2, A2), g_(A2, A2)) == g_(A2, g_(A2, g_(A2, A2)))
     // Source: examples/calc.egg:24
+    let a = aConst();
+    // Source: examples/calc.egg:25
     let b = bConst();
     // Source: examples/calc.egg:27
+    // Assert: g_(g_(b, g_(inv(a), a)), inv(b)) == g_(b, inv(b))
+    // Source: examples/calc.egg:28
     // Assert: g_(b, inv(b)) == I
-    // Source: examples/calc.egg:27
+    // Source: examples/calc.egg:28
     let default_ruleset = MyTx::new_ruleset("default_ruleset");
-    // Source: examples/calc.egg:27
+    // Source: examples/calc.egg:28
     MyTx::run_ruleset(MyTx, RunConfig::Sat);
-    println!("Eggplant program executed successfully!");
+    info!("Eggplant program executed successfully!");
 }

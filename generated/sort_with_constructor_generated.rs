@@ -32,5 +32,5 @@ fn main() {
     let default_ruleset = MyTx::new_ruleset("default_ruleset");
     // Source: sort_with_constructor.egg:7
     MyTx::run_ruleset(MyTx, RunConfig::Sat);
-    println!("Eggplant program executed successfully!");
+    info!("Eggplant program executed successfully!");
 }

@@ -1,6 +1,7 @@
 // Generated Eggplant Rust Code
 // Source files referenced in comments below
 use eggplant::{{prelude::*, tx_rx_vt_pr}};
+use log::info;
 
 // Source: examples/simple.egg:1
 // Datatype 'Math' defined with variants:
@@ -28,6 +29,7 @@ struct AddPat {
 }
 
 fn main() {
+    env_logger::init();
     // Source: examples/simple.egg:3
     // Rule: add_rule
     MyTx::add_rule(
@@ -51,5 +53,5 @@ ctx.union(pat.p, add_value);
     // Add(Num(1), Num(2)) => Num(3)
     // Source: examples/simple.egg:5
     // Assert: eval(Add(Num(1), Num(2))) == Num(3)
-    println!("Eggplant program executed successfully!");
+    info!("Eggplant program executed successfully!");
 }
