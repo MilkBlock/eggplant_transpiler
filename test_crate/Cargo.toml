@@ -1,9 +1,0 @@
-[package]
-name = "eggplant_test_crate"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-eggplant = { path = "../../eggplant" }
-log = "0.4"
-env_logger = "0.11"
