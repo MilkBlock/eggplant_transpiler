@@ -6,8 +6,9 @@
 use eggplant_transpiler::ast::parse::Parser;
 use eggplant_transpiler::eggplant::*;
 use eggplant_transpiler::{Expr, Literal, Span};
-use log::{info, debug};
+use log::{debug, info, warn};
 use std::fs;
+use walkdir::WalkDir;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
@@ -19,27 +20,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rust_gen = EggplantCodeGenerator::new();
     let mut generated_files = Vec::new();
 
-    for entry in fs::read_dir("examples")? {
+    for entry in walkdir::WalkDir::new("examples") {
         let entry = entry?;
         let path = entry.path();
 
-        if path.extension().map_or(false, |ext| ext == "egg") {
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "egg") {
             let file_name = path.file_name().unwrap().to_string_lossy().to_string();
             info!("=== Parsing {} ===", file_name);
 
             let content = fs::read_to_string(&path)?;
             let commands = parser.get_program_from_string(Some(file_name.clone()), &content)?;
-            let eggplant_commands = convert_to_eggplant_with_source(&commands, Some(path.to_string_lossy().to_string()));
+            let eggplant_commands = convert_to_eggplant_with_source(
+                &commands,
+                Some(path.to_string_lossy().to_string()),
+            );
 
-            debug!("Converted {} egglog commands to {} eggplant commands",
-                commands.len(), eggplant_commands.len());
+            debug!(
+                "Converted {} egglog commands to {} eggplant commands",
+                commands.len(),
+                eggplant_commands.len()
+            );
 
             let rust_code = rust_gen.generate_rust(&eggplant_commands);
             debug!("Generated {} lines of Rust code", rust_code.lines().count());
 
-            let output_file = format!("generated/eggplant/{}.rs", path.file_stem().unwrap().to_string_lossy());
-            fs::create_dir_all("generated/eggplant")?;
+            let relative_path = path.strip_prefix("examples").unwrap_or(&path);
+            let output_file = format!(
+                "generated/eggplant/{}.rs",
+                relative_path.with_extension("").to_string_lossy()
+            );
+            if let Some(parent) = std::path::Path::new(&output_file).parent() {
+                fs::create_dir_all(parent)?;
+            }
             fs::write(&output_file, &rust_code)?;
+
+            // Format the generated Rust code
+            let fmt_result = std::process::Command::new("cargo")
+                .args(["fmt", "--", &output_file])
+                .output();
+
+            match fmt_result {
+                Ok(output) if output.status.success() => {
+                    debug!("Successfully formatted {}", output_file);
+                }
+                Ok(output) => {
+                    warn!(
+                        "Failed to format {}: {}",
+                        output_file,
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                Err(e) => {
+                    warn!("Failed to run cargo fmt on {}: {}", output_file, e);
+                }
+            }
 
             generated_files.push(output_file);
         }
@@ -181,7 +215,8 @@ mod tests {
             .get_program_from_string(Some("calc.egg".to_string()), &calc_content)
             .unwrap();
 
-        let eggplant_commands = convert_to_eggplant_with_source(&commands, Some("examples/calc.egg".to_string()));
+        let eggplant_commands =
+            convert_to_eggplant_with_source(&commands, Some("examples/calc.egg".to_string()));
         assert!(!eggplant_commands.is_empty());
 
         // Test code generation

@@ -94,7 +94,12 @@ impl<Head: Display, Leaf: Display> Display for GenericFact<Head, Leaf> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GenericAction<Head, Leaf> {
     Let(Span, Leaf, GenericExpr<Head, Leaf>),
-    Set(Span, Head, Vec<GenericExpr<Head, Leaf>>, GenericExpr<Head, Leaf>),
+    Set(
+        Span,
+        Head,
+        Vec<GenericExpr<Head, Leaf>>,
+        GenericExpr<Head, Leaf>,
+    ),
     Union(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     Expr(Span, GenericExpr<Head, Leaf>),
 }

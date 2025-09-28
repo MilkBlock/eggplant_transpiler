@@ -1,7 +1,0 @@
-(sort Bool)
-(constructor True () Bool)
-(constructor False () Bool)
-
-(sort Int)
-(constructor Zero () Int)
-(constructor Succ (Int) Int)

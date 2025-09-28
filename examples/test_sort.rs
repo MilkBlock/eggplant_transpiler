@@ -1,6 +1,6 @@
 use eggplant_transpiler::ast::parse::Parser;
-use eggplant_transpiler::eggplant::{convert_to_eggplant_with_source, EggplantCodeGenerator};
-use log::{info, debug};
+use eggplant_transpiler::eggplant::{EggplantCodeGenerator, convert_to_eggplant_with_source};
+use log::{debug, info};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
@@ -21,9 +21,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Convert to eggplant commands
-    let eggplant_commands = convert_to_eggplant_with_source(&commands, Some("sort_test.egg".to_string()));
+    let eggplant_commands =
+        convert_to_eggplant_with_source(&commands, Some("sort_test.egg".to_string()));
 
-    debug!("Converted to {} eggplant commands:", eggplant_commands.len());
+    debug!(
+        "Converted to {} eggplant commands:",
+        eggplant_commands.len()
+    );
     for (i, cmd) in eggplant_commands.iter().enumerate() {
         debug!("  {}: {:?}", i, cmd);
     }
