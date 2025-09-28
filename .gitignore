@@ -1,2 +1,4 @@
 /target
 /generated
+test_crate/target
+test_crate/src/main.rs
