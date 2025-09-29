@@ -132,21 +132,37 @@ impl EggplantCodeGenerator {
             }
         }
 
+        // Collect ruleset definitions
+        let mut ruleset_definitions = Vec::new();
+        let mut other_commands = Vec::new();
+
+        for cmd_with_source in commands {
+            match &cmd_with_source.command {
+                EggplantCommand::Ruleset(_) => {
+                    ruleset_definitions.push(cmd_with_source);
+                }
+                EggplantCommand::DslType(_) | EggplantCommand::PatternVars(_) => {
+                    // Skip type definitions (already generated above)
+                }
+                _ => {
+                    other_commands.push(cmd_with_source);
+                }
+            }
+        }
+
         // Add main function
         self.add_line("fn main() {");
         self.indent();
         self.add_line("env_logger::init();");
 
-        // Generate runtime commands (inside main)
-        for cmd_with_source in commands {
-            match &cmd_with_source.command {
-                EggplantCommand::DslType(_) | EggplantCommand::PatternVars(_) => {
-                    // Skip type definitions (already generated above)
-                }
-                _ => {
-                    self.generate_rust_command_with_source(cmd_with_source);
-                }
-            }
+        // Generate ruleset definitions at the beginning of main
+        for cmd_with_source in ruleset_definitions {
+            self.generate_rust_command_with_source(cmd_with_source);
+        }
+
+        // Generate other runtime commands
+        for cmd_with_source in other_commands {
+            self.generate_rust_command_with_source(cmd_with_source);
         }
 
         self.add_line("info!(\"Eggplant program executed successfully!\");");
@@ -626,6 +642,7 @@ pub fn convert_to_eggplant_with_source(
     source_file: Option<String>,
 ) -> Vec<EggplantCommandWithSource> {
     let mut eggplant_commands = Vec::new();
+    let mut dsl_types: HashMap<String, DslType> = HashMap::new();
 
     // Add transaction definition
     eggplant_commands.push(EggplantCommandWithSource {
@@ -705,11 +722,14 @@ pub fn convert_to_eggplant_with_source(
                     });
                 }
 
+                let dsl_type = DslType {
+                    name: normalize_identifier(name),
+                    variants: dsl_variants.clone(),
+                };
+                dsl_types.insert(normalize_identifier(name), dsl_type.clone());
+
                 eggplant_commands.push(EggplantCommandWithSource {
-                    command: EggplantCommand::DslType(DslType {
-                        name: normalize_identifier(name),
-                        variants: dsl_variants,
-                    }),
+                    command: EggplantCommand::DslType(dsl_type),
                     source_file: source_file.clone(),
                     source_line: Some(line_counter),
                 });
@@ -865,8 +885,8 @@ pub fn convert_to_eggplant_with_source(
                 // Analyze the rewrite pattern to extract variables and structure
                 // Always use line counter for unique pattern variable names to avoid conflicts
                 let unique_name = format!("rule_{}", line_counter);
-                let (pattern_vars, pattern_query) =
-                    analyze_rewrite_pattern(&rewrite.lhs, &unique_name);
+                let (pattern_vars, pattern_query, context) =
+                    analyze_rewrite_pattern(&rewrite.lhs, &unique_name, &dsl_types);
 
                 // Create pattern variables
                 eggplant_commands.push(EggplantCommandWithSource {
@@ -876,7 +896,12 @@ pub fn convert_to_eggplant_with_source(
                 });
 
                 // Create rule with pattern query and action
-                let action = generate_rewrite_action(&rewrite.rhs, &unique_name);
+                let action = generate_rewrite_action_with_context(
+                    &rewrite.rhs,
+                    &unique_name,
+                    &context,
+                    &dsl_types,
+                );
 
                 let rule = EggplantRule {
                     name: unique_name.clone(),
@@ -943,11 +968,14 @@ pub fn convert_to_eggplant_with_source(
                     .cloned()
                     .unwrap_or_else(Vec::new);
 
+                let dsl_type = DslType {
+                    name: normalize_identifier(name),
+                    variants: dsl_variants.clone(),
+                };
+                dsl_types.insert(normalize_identifier(name), dsl_type.clone());
+
                 eggplant_commands.push(EggplantCommandWithSource {
-                    command: EggplantCommand::DslType(DslType {
-                        name: normalize_identifier(name),
-                        variants: dsl_variants,
-                    }),
+                    command: EggplantCommand::DslType(dsl_type),
                     source_file: source_file.clone(),
                     source_line: Some(line_counter),
                 });
@@ -1001,7 +1029,7 @@ fn is_basic_type(type_name: &str) -> bool {
     basic_types.contains(&type_name)
 }
 
-/// Infer type from expression context
+/// Infer type from expression context with better variable type inference
 fn infer_type_from_expr(expr: &Expr) -> String {
     match expr {
         Expr::Call(_, func_name, _) => normalize_identifier(func_name),
@@ -1016,21 +1044,124 @@ fn infer_type_from_expr(expr: &Expr) -> String {
     }
 }
 
+/// Infer variable type from constructor context using DSL type information
+fn infer_variable_type_from_constructor(
+    var_name: &str,
+    constructor_name: &str,
+    arg_index: usize,
+    dsl_types: &HashMap<String, DslType>,
+) -> String {
+    // Look for the constructor in DSL types
+    for (dsl_type_name, dsl_type) in dsl_types {
+        // Find the variant that matches the constructor name
+        if let Some(variant) = dsl_type
+            .variants
+            .iter()
+            .find(|v| v.name == constructor_name)
+        {
+            // Check if we have a field at this argument index
+            if arg_index < variant.fields.len() {
+                return variant.fields[arg_index].field_type.clone();
+            } else {
+                // If no field at this index, return the DSL type name
+                return dsl_type_name.clone();
+            }
+        }
+    }
+
+    // Fallback: if constructor not found in DSL types, use simplified inference
+    match constructor_name {
+        "Const" => "Const".to_string(),
+        "Div" => {
+            match arg_index {
+                0 => "Const".to_string(),
+                1 => "Const".to_string(),
+                _ => "Expr".to_string(),
+            }
+        }
+        "Add" => "Expr".to_string(),
+        "Sub" => "Expr".to_string(),
+        "Mul" => "Expr".to_string(),
+        _ => "Expr".to_string(),
+    }
+}
+
+/// Generate better pattern query with type inference and variable context
+fn generate_pattern_query_with_context(lhs: &Expr, rule_name: &str, dsl_types: &HashMap<String, DslType>) -> (PatternVars, String, HashMap<String, (String, String, usize)>) {
+    let mut variables = Vec::new();
+    let mut pattern_query_parts = Vec::new();
+    let mut node_counter = 0;
+    let mut variable_constructors = HashMap::new();
+    let mut all_nodes = Vec::new();
+
+    // Extract variables with better type inference and build the query tree
+    let root_node = extract_variables_with_types_and_context(
+        lhs,
+        &mut variables,
+        &mut pattern_query_parts,
+        &mut node_counter,
+        dsl_types,
+        &mut variable_constructors,
+        &mut all_nodes,
+    );
+
+    // Create pattern variables struct - include constructor nodes for basic type access
+    let mut pattern_vars_variables = variables.clone();
+
+    // Add constructor nodes to pattern variables for basic type field access
+    for (var_name, (constructor_name, node_name, _)) in &variable_constructors {
+        if !pattern_vars_variables.iter().any(|v| v.name == *node_name) {
+            pattern_vars_variables.push(PatternVariable {
+                name: node_name.clone(),
+                var_type: constructor_name.clone(),
+            });
+        }
+    }
+
+    let pattern_vars = PatternVars {
+        name: format!("{}Pat", rule_name),
+        variables: pattern_vars_variables,
+    };
+
+    // Generate improved pattern query
+    let pattern_query = if pattern_query_parts.is_empty() {
+        format!("// TODO: implement pattern query for {}", rule_name)
+    } else {
+        let mut query = pattern_query_parts.join("\n");
+        query.push_str(&format!("\n{}Pat::new(", rule_name));
+
+        // Add all query nodes to pattern struct creation
+        // This includes constructor nodes that represent the pattern structure
+        let all_refs: Vec<String> = all_nodes
+            .iter()
+            .map(|node_name| node_name.clone())
+            .collect();
+        query.push_str(&all_refs.join(", "));
+        query.push(')');
+        query
+    };
+
+    (pattern_vars, pattern_query, variable_constructors)
+}
+
 /// Generate better pattern query with type inference
-fn generate_pattern_query(lhs: &Expr, rule_name: &str) -> (PatternVars, String) {
+fn generate_pattern_query(lhs: &Expr, rule_name: &str, dsl_types: &HashMap<String, DslType>) -> (PatternVars, String) {
     let mut variables = Vec::new();
     let mut pattern_query_parts = Vec::new();
     let mut node_counter = 0;
 
     // Extract variables with better type inference and build the query tree
+    let mut all_nodes = Vec::new();
     let root_node = extract_variables_with_types(
         lhs,
         &mut variables,
         &mut pattern_query_parts,
         &mut node_counter,
+        dsl_types,
+        &mut all_nodes,
     );
 
-    // Create pattern variables struct
+    // Create pattern variables struct - include all variables
     let pattern_vars = PatternVars {
         name: format!("{}Pat", rule_name),
         variables: variables.clone(),
@@ -1043,8 +1174,12 @@ fn generate_pattern_query(lhs: &Expr, rule_name: &str) -> (PatternVars, String) 
         let mut query = pattern_query_parts.join("\n");
         query.push_str(&format!("\n{}Pat::new(", rule_name));
 
-        // Add variable references - include all variables and the root node
-        let mut all_refs: Vec<String> = variables.iter().map(|v| v.name.clone()).collect();
+        // Add variable references - only include complex type variables (query nodes)
+        let mut all_refs: Vec<String> = variables
+            .iter()
+            .filter(|v| !is_basic_type(&v.var_type))
+            .map(|v| v.name.clone())
+            .collect();
         // If the root is not a variable (it's a function call), add it as well
         if !variables.iter().any(|v| v.name == root_node)
             && !root_node
@@ -1061,25 +1196,37 @@ fn generate_pattern_query(lhs: &Expr, rule_name: &str) -> (PatternVars, String) 
     (pattern_vars, pattern_query)
 }
 
-/// Extract variables with type inference and build query pattern tree
-fn extract_variables_with_types(
+/// Extract variables with type inference and build query pattern tree with variable context
+fn extract_variables_with_types_and_context(
     expr: &Expr,
     variables: &mut Vec<PatternVariable>,
     pattern_query_parts: &mut Vec<String>,
     node_counter: &mut usize,
+    dsl_types: &HashMap<String, DslType>,
+    variable_constructors: &mut HashMap<String, (String, String, usize)>,
+    all_nodes: &mut Vec<String>,
 ) -> String {
     match expr {
         Expr::Var(_, var_name) => {
             // Variable reference - add to pattern variables with inferred type
             let var_type = infer_type_from_expr(expr);
 
-            // Only add complex types to pattern variables, basic types become StrippedCondition
+            // Only add complex type variables to pattern variables
+            // Basic type variables will be accessed through constructor instance fields
             if !is_basic_type(&var_type) && !variables.iter().any(|v| v.name == *var_name) {
                 variables.push(PatternVariable {
                     name: var_name.clone(),
                     var_type: var_type.clone(),
                 });
-                pattern_query_parts.push(format!("let {} = Expr::query_leaf();", var_name));
+                // For complex types, add query
+                let query_method = if is_leaf_constructor(&var_type, dsl_types) {
+                    "query_leaf"
+                } else {
+                    "query"
+                };
+                pattern_query_parts.push(format!("let {} = {}::{}();", var_name, var_type, query_method));
+                // Add variable node to all nodes
+                all_nodes.push(var_name.clone());
             }
             var_name.clone()
         }
@@ -1088,22 +1235,77 @@ fn extract_variables_with_types(
             let mut complex_arg_nodes = Vec::new();
             let mut basic_conditions = Vec::new();
 
-            for arg in args {
-                let arg_node =
-                    extract_variables_with_types(arg, variables, pattern_query_parts, node_counter);
+            for (index, arg) in args.iter().enumerate() {
+                // For constructor calls, infer variable types from context
+                let arg_node = if let Expr::Var(_, var_name) = arg {
+                    // This variable appears in a constructor call - infer its type
+                    let inferred_type =
+                        infer_variable_type_from_constructor(var_name, func_name, index, dsl_types);
+
+                    // Generate unique node name for this constructor instance
+                    *node_counter += 1;
+                    let constructor_node_name = format!(
+                        "{}_node{}",
+                        normalize_identifier(&func_name.to_lowercase()),
+                        node_counter
+                    );
+
+                    // Record the constructor context for this variable
+                    variable_constructors.insert(var_name.clone(), (func_name.clone(), constructor_node_name.clone(), index));
+
+                    // Only add complex type variables to pattern variables
+                    // Basic type variables will be accessed through constructor instance fields
+                    if !is_basic_type(&inferred_type) && !variables.iter().any(|v| v.name == *var_name) {
+                        variables.push(PatternVariable {
+                            name: var_name.clone(),
+                            var_type: inferred_type.clone(),
+                        });
+                        // For complex types, add query
+                        let query_method = if is_leaf_constructor(&inferred_type, dsl_types) {
+                            "query_leaf"
+                        } else {
+                            "query"
+                        };
+                        pattern_query_parts
+                            .push(format!("let {} = {}::{}();", var_name, inferred_type, query_method));
+                    }
+                    var_name.clone()
+                } else {
+                    // For non-variable arguments, use the normal recursive extraction
+                    extract_variables_with_types_and_context(arg, variables, pattern_query_parts, node_counter, dsl_types, variable_constructors, all_nodes)
+                };
 
                 // Check if this argument is a basic type (literal or basic type variable)
                 let arg_type = infer_type_from_expr(arg);
                 if is_basic_type(&arg_type) {
                     // For basic types, create StrippedCondition instead of query parameter
                     if let Expr::Var(_, var_name) = arg {
-                        basic_conditions.push(format!("pat.{} == {}", var_name, arg_node));
+                        // Basic type variables are accessed through their constructor variant fields
+                        // We need to find the field name for this variable in the constructor
+                        let field_name = get_field_name_for_variable_in_constructor(func_name, index, dsl_types);
+                        basic_conditions.push(format!("pat.{}.{} == {}", func_name, field_name, arg_node));
                     } else {
                         // For literals, just use the value directly
                         basic_conditions.push(format!("pat.{} == {}", func_name, arg_node));
                     }
                 } else {
-                    complex_arg_nodes.push(arg_node);
+                    // For complex types, add to argument nodes only if this is not a leaf constructor
+                    if !is_leaf_constructor(func_name, dsl_types) {
+                        complex_arg_nodes.push(arg_node);
+                    }
+                }
+            }
+
+            // Special case: if this is a constructor call with only variable arguments,
+            // we still need to create query nodes for the constructor to represent the hyperedge
+            // but we can simplify the return value
+            let all_args_are_variables = args.iter().all(|arg| matches!(arg, Expr::Var(_, _)));
+            if all_args_are_variables && complex_arg_nodes.len() == args.len() {
+                // For constructor calls like (Const b), we still need the constructor query
+                // but we can use the first variable node as the return value for pattern matching
+                if !complex_arg_nodes.is_empty() {
+                    // We still create the constructor query node, but return the variable for pattern
+                    // This ensures all constructor queries are generated
                 }
             }
 
@@ -1114,6 +1316,9 @@ fn extract_variables_with_types(
                 normalize_identifier(&func_name.to_lowercase()),
                 node_counter
             );
+
+            // Add this node to the list of all nodes
+            all_nodes.push(node_name.clone());
 
             // Build argument references - only for complex types
             let arg_refs: Vec<String> = complex_arg_nodes
@@ -1133,12 +1338,193 @@ fn extract_variables_with_types(
                 .collect();
 
             // Add the query for this function call (the hyperedge) - only complex args
-            pattern_query_parts.push(format!(
-                "let {} = {}::query({});",
-                node_name,
-                normalize_identifier(func_name),
-                arg_refs.join(", ")
-            ));
+            // Use query_leaf() for leaf nodes (no arguments), query() for internal nodes
+            if is_leaf_constructor(func_name, dsl_types) {
+                // Leaf nodes use query_leaf() without arguments
+                pattern_query_parts.push(format!(
+                    "let {} = {}::query_leaf();",
+                    node_name,
+                    normalize_identifier(func_name)
+                ));
+            } else {
+                // Internal nodes use query() with arguments
+                pattern_query_parts.push(format!(
+                    "let {} = {}::query({});",
+                    node_name,
+                    normalize_identifier(func_name),
+                    arg_refs.join(", ")
+                ));
+            }
+
+            // Add StrippedCondition checks for basic types
+            if !basic_conditions.is_empty() {
+                pattern_query_parts.push(format!(
+                    "// StrippedCondition checks: {}",
+                    basic_conditions.join(" && ")
+                ));
+            }
+
+            node_name
+        }
+        Expr::Lit(_, lit) => {
+            // Literal - no variables to extract, return literal value
+            match lit {
+                Literal::Int(i) => i.to_string(),
+                Literal::Float(f) => f.0.to_string(),
+                Literal::String(s) => format!("\"{}\"", s),
+                Literal::Bool(b) => b.to_string(),
+                Literal::Unit => "()".to_string(),
+            }
+        }
+    }
+}
+
+/// Extract variables with type inference and build query pattern tree
+fn extract_variables_with_types(
+    expr: &Expr,
+    variables: &mut Vec<PatternVariable>,
+    pattern_query_parts: &mut Vec<String>,
+    node_counter: &mut usize,
+    dsl_types: &HashMap<String, DslType>,
+    all_nodes: &mut Vec<String>,
+) -> String {
+    match expr {
+        Expr::Var(_, var_name) => {
+            // Variable reference - add to pattern variables with inferred type
+            let var_type = infer_type_from_expr(expr);
+
+            // Only add complex type variables to pattern variables
+            // Basic type variables will be accessed through constructor instance fields
+            if !is_basic_type(&var_type) && !variables.iter().any(|v| v.name == *var_name) {
+                variables.push(PatternVariable {
+                    name: var_name.clone(),
+                    var_type: var_type.clone(),
+                });
+                // For complex types, add query
+                let query_method = if is_leaf_constructor(&var_type, dsl_types) {
+                    "query_leaf"
+                } else {
+                    "query"
+                };
+                pattern_query_parts.push(format!("let {} = {}::{}();", var_name, var_type, query_method));
+                // Add variable node to all nodes
+                all_nodes.push(var_name.clone());
+            }
+            var_name.clone()
+        }
+        Expr::Call(_, func_name, args) => {
+            // Function call - recursively extract variables from arguments and build the tree
+            let mut complex_arg_nodes = Vec::new();
+            let mut basic_conditions = Vec::new();
+
+            for (index, arg) in args.iter().enumerate() {
+                // For constructor calls, infer variable types from context
+                let arg_node = if let Expr::Var(_, var_name) = arg {
+                    // This variable appears in a constructor call - infer its type
+                    let inferred_type =
+                        infer_variable_type_from_constructor(var_name, func_name, index, dsl_types);
+
+                    // Only add complex type variables to pattern variables, not basic types
+                    if !is_basic_type(&inferred_type) && !variables.iter().any(|v| v.name == *var_name) {
+                        variables.push(PatternVariable {
+                            name: var_name.clone(),
+                            var_type: inferred_type.clone(),
+                        });
+                        // For complex types, add query
+                        let query_method = if is_leaf_constructor(&inferred_type, dsl_types) {
+                            "query_leaf"
+                        } else {
+                            "query"
+                        };
+                        pattern_query_parts
+                            .push(format!("let {} = {}::{}();", var_name, inferred_type, query_method));
+                    }
+                    var_name.clone()
+                } else {
+                    // For non-variable arguments, use the normal recursive extraction
+                    extract_variables_with_types(arg, variables, pattern_query_parts, node_counter, dsl_types, all_nodes)
+                };
+
+                // Check if this argument is a basic type (literal or basic type variable)
+                let arg_type = infer_type_from_expr(arg);
+                if is_basic_type(&arg_type) {
+                    // For basic types, create StrippedCondition instead of query parameter
+                    if let Expr::Var(_, var_name) = arg {
+                        // Basic type variables are accessed through their constructor variant fields
+                        // We need to find the field name for this variable in the constructor
+                        let field_name = get_field_name_for_variable_in_constructor(func_name, index, dsl_types);
+                        basic_conditions.push(format!("pat.{}.{} == {}", func_name, field_name, arg_node));
+                    } else {
+                        // For literals, just use the value directly
+                        basic_conditions.push(format!("pat.{} == {}", func_name, arg_node));
+                    }
+                } else {
+                    // For complex types, add to argument nodes only if this is not a leaf constructor
+                    if !is_leaf_constructor(func_name, dsl_types) {
+                        complex_arg_nodes.push(arg_node);
+                    }
+                }
+            }
+
+            // Special case: if this is a constructor call with only variable arguments,
+            // we still need to create query nodes for the constructor to represent the hyperedge
+            // but we can simplify the return value
+            let all_args_are_variables = args.iter().all(|arg| matches!(arg, Expr::Var(_, _)));
+            if all_args_are_variables && complex_arg_nodes.len() == args.len() {
+                // For constructor calls like (Const b), we still need the constructor query
+                // but we can use the first variable node as the return value for pattern matching
+                if !complex_arg_nodes.is_empty() {
+                    // We still create the constructor query node, but return the variable for pattern
+                    // This ensures all constructor queries are generated
+                }
+            }
+
+            // Generate unique node name for this function call
+            *node_counter += 1;
+            let node_name = format!(
+                "{}_node{}",
+                normalize_identifier(&func_name.to_lowercase()),
+                node_counter
+            );
+
+            // Add this node to the list of all nodes
+            all_nodes.push(node_name.clone());
+
+            // Build argument references - only for complex types
+            let arg_refs: Vec<String> = complex_arg_nodes
+                .iter()
+                .map(|node_name| {
+                    // Check if this is a literal (starts with digit or quote)
+                    if node_name
+                        .chars()
+                        .next()
+                        .map_or(false, |c| c.is_digit(10) || c == '"')
+                    {
+                        node_name.clone()
+                    } else {
+                        format!("&{}", node_name)
+                    }
+                })
+                .collect();
+
+            // Add the query for this function call (the hyperedge) - only complex args
+            // Use query_leaf() for leaf nodes (no arguments), query() for internal nodes
+            if is_leaf_constructor(func_name, dsl_types) {
+                // Leaf nodes use query_leaf() without arguments
+                pattern_query_parts.push(format!(
+                    "let {} = {}::query_leaf();",
+                    node_name,
+                    normalize_identifier(func_name)
+                ));
+            } else {
+                // Internal nodes use query() with arguments
+                pattern_query_parts.push(format!(
+                    "let {} = {}::query({});",
+                    node_name,
+                    normalize_identifier(func_name),
+                    arg_refs.join(", ")
+                ));
+            }
 
             // Add StrippedCondition checks for basic types
             if !basic_conditions.is_empty() {
@@ -1171,9 +1557,25 @@ pub fn convert_to_eggplant(commands: &[Command]) -> Vec<EggplantCommand> {
         .collect()
 }
 
+/// Variable context that maps variables to their constructor and field information
+#[derive(Debug, Clone)]
+struct VariableContext {
+    variables: Vec<PatternVariable>,
+    variable_constructors: HashMap<String, (String, String, usize)>, // var_name -> (constructor_name, node_name, arg_index)
+}
+
 /// Analyze a rewrite pattern to extract pattern variables and generate pattern query
-fn analyze_rewrite_pattern(lhs: &Expr, rule_name: &str) -> (PatternVars, String) {
-    generate_pattern_query(lhs, rule_name)
+fn analyze_rewrite_pattern(
+    lhs: &Expr,
+    rule_name: &str,
+    dsl_types: &HashMap<String, DslType>,
+) -> (PatternVars, String, VariableContext) {
+    let (pattern_vars, pattern_query, variable_constructors) = generate_pattern_query_with_context(lhs, rule_name, dsl_types);
+    let context = VariableContext {
+        variables: pattern_vars.variables.clone(),
+        variable_constructors,
+    };
+    (pattern_vars, pattern_query, context)
 }
 
 /// Extract variables from an expression and build pattern query
@@ -1237,16 +1639,34 @@ fn extract_variables_from_expr(
     }
 }
 
-/// Generate rewrite action from the right-hand side pattern
-fn generate_rewrite_action(rhs: &Expr, rule_name: &str) -> String {
+/// Generate rewrite action from the right-hand side pattern with variable context
+fn generate_rewrite_action_with_context(
+    rhs: &Expr,
+    rule_name: &str,
+    context: &VariableContext,
+    dsl_types: &HashMap<String, DslType>,
+) -> String {
     match rhs {
         Expr::Var(_, var_name) => {
             // Simple variable reference
-            format!(
-                "ctx.union(pat.{}_node1, pat.{});",
-                rule_name.to_lowercase(),
-                var_name
-            )
+            // Check if this variable is a basic type accessed through constructor
+            if let Some((constructor_name, node_name, arg_index)) = context.variable_constructors.get(var_name) {
+                // Basic type variable accessed through constructor field
+                let field_name = get_field_name_for_variable_in_constructor(constructor_name, *arg_index, dsl_types);
+                format!(
+                    "ctx.union(pat.{}_node1, ctx.insert_literal(pat.{}.{}));",
+                    rule_name.to_lowercase(),
+                    node_name,
+                    field_name
+                )
+            } else {
+                // Complex type variable
+                format!(
+                    "ctx.union(pat.{}_node1, pat.{});",
+                    rule_name.to_lowercase(),
+                    var_name
+                )
+            }
         }
         Expr::Call(_, func_name, args) => {
             // Check if this is a basic operation (+, -, *, /) that needs ctx.devalue()
@@ -1255,23 +1675,7 @@ fn generate_rewrite_action(rhs: &Expr, rule_name: &str) -> String {
                 let operation_args: Vec<String> = args
                     .iter()
                     .map(|arg| {
-                        match arg {
-                            Expr::Var(_, name) => {
-                                // For variables, use ctx.devalue() to get basic values
-                                format!("ctx.devalue(pat.{})", name)
-                            }
-                            Expr::Call(_, sub_func, sub_args) => {
-                                // For nested calls, recursively generate the operation
-                                generate_basic_operation(sub_func, sub_args)
-                            }
-                            Expr::Lit(_, lit) => match lit {
-                                Literal::Int(i) => i.to_string(),
-                                Literal::Float(f) => f.0.to_string(),
-                                Literal::String(s) => format!("\"{}\"", s),
-                                Literal::Bool(b) => b.to_string(),
-                                Literal::Unit => "()".to_string(),
-                            },
-                        }
+                        generate_basic_operation_with_context(arg, func_name, context, dsl_types)
                     })
                     .collect();
 
@@ -1283,11 +1687,9 @@ fn generate_rewrite_action(rhs: &Expr, rule_name: &str) -> String {
                 )
             } else {
                 // Regular function call - check if any arguments contain basic operations
-                let has_basic_operations = args.iter().any(|arg| {
-                    match arg {
-                        Expr::Call(_, sub_func, _) => is_basic_operation(sub_func),
-                        _ => false,
-                    }
+                let has_basic_operations = args.iter().any(|arg| match arg {
+                    Expr::Call(_, sub_func, _) => is_basic_operation(sub_func),
+                    _ => false,
                 });
 
                 if has_basic_operations {
@@ -1295,49 +1697,7 @@ fn generate_rewrite_action(rhs: &Expr, rule_name: &str) -> String {
                     let computed_args: Vec<String> = args
                         .iter()
                         .map(|arg| {
-                            match arg {
-                                Expr::Var(_, name) => {
-                                    // For variables, use ctx.devalue() to get basic values
-                                    format!("ctx.devalue(pat.{})", name)
-                                }
-                                Expr::Call(_, sub_func, sub_args) => {
-                                    if is_basic_operation(sub_func) {
-                                        // Generate basic operation with devalue calls
-                                        let operation_args: Vec<String> = sub_args
-                                            .iter()
-                                            .map(|sub_arg| {
-                                                match sub_arg {
-                                                    Expr::Var(_, sub_name) => {
-                                                        format!("ctx.devalue(pat.{})", sub_name)
-                                                    }
-                                                    Expr::Call(_, _, _) => {
-                                                        // Recursively handle nested operations
-                                                        generate_basic_operation(sub_func, sub_args)
-                                                    }
-                                                    Expr::Lit(_, lit) => match lit {
-                                                        Literal::Int(i) => i.to_string(),
-                                                        Literal::Float(f) => f.0.to_string(),
-                                                        Literal::String(s) => format!("\"{}\"", s),
-                                                        Literal::Bool(b) => b.to_string(),
-                                                        Literal::Unit => "()".to_string(),
-                                                    },
-                                                }
-                                            })
-                                            .collect();
-                                        format!("({} {} {})", operation_args[0], sub_func, operation_args[1])
-                                    } else {
-                                        // Regular nested function call
-                                        format!("&pat.{}_node2", normalize_identifier(&sub_func.to_lowercase()))
-                                    }
-                                }
-                                Expr::Lit(_, lit) => match lit {
-                                    Literal::Int(i) => i.to_string(),
-                                    Literal::Float(f) => f.0.to_string(),
-                                    Literal::String(s) => format!("\"{}\"", s),
-                                    Literal::Bool(b) => b.to_string(),
-                                    Literal::Unit => "()".to_string(),
-                                },
-                            }
+                            generate_basic_operation_with_context(arg, func_name, context, dsl_types)
                         })
                         .collect();
 
@@ -1356,10 +1716,12 @@ fn generate_rewrite_action(rhs: &Expr, rule_name: &str) -> String {
                             match arg {
                                 Expr::Var(_, name) => {
                                     // For variables, check if they are basic types and use ctx.devalue()
-                                    let var_type = infer_type_from_expr(arg);
-                                    if is_basic_type(&var_type) {
-                                        format!("ctx.devalue(pat.{})", name)
+                                    if let Some((constructor_name, node_name, arg_index)) = context.variable_constructors.get(name) {
+                                        // Basic type variable accessed through constructor field
+                                        let field_name = get_field_name_for_variable_in_constructor(constructor_name, *arg_index, dsl_types);
+                                        format!("ctx.devalue(pat.{}.{})", node_name, field_name)
                                     } else {
+                                        // Complex type variable
                                         format!("&pat.{}", name)
                                     }
                                 }
@@ -1410,28 +1772,476 @@ fn generate_rewrite_action(rhs: &Expr, rule_name: &str) -> String {
     }
 }
 
+/// Generate rewrite action from the right-hand side pattern with variable type information
+fn generate_rewrite_action_with_variables(
+    rhs: &Expr,
+    rule_name: &str,
+    variables: &[PatternVariable],
+    dsl_types: &HashMap<String, DslType>,
+) -> String {
+    match rhs {
+        Expr::Var(_, var_name) => {
+            // Simple variable reference
+            // For variables of complex types like Const, we need to access their fields
+            // Find the variable type and use the first field
+            if let Some(var_info) = variables.iter().find(|v| v.name == *var_name) {
+                // Get the field name from DSL type information
+                let field_name = get_field_name_for_variable(var_info, dsl_types);
+                format!(
+                    "ctx.union(pat.{}_node1, pat.{});",
+                    rule_name.to_lowercase(),
+                    var_name
+                )
+            } else {
+                format!(
+                    "ctx.union(pat.{}_node1, pat.{});",
+                    rule_name.to_lowercase(),
+                    var_name
+                )
+            }
+        }
+        Expr::Call(_, func_name, args) => {
+            // Check if this is a basic operation (+, -, *, /) that needs ctx.devalue()
+            if is_basic_operation(func_name) {
+                // For basic operations, we need to extract values using ctx.devalue()
+                let operation_args: Vec<String> = args
+                    .iter()
+                    .map(|arg| {
+                        match arg {
+                            Expr::Var(_, name) => {
+                                // For variables, use ctx.devalue() to get basic values
+                                // Find the variable type and use the appropriate field
+                                if let Some(var_info) = variables.iter().find(|v| v.name == *name) {
+                                    if is_basic_type(&var_info.var_type) {
+                                        // For basic type variables, access directly
+                                        format!("ctx.devalue(pat.{})", name)
+                                    } else {
+                                        // For complex type variables, access via field
+                                        let field_name =
+                                            get_field_name_for_variable(var_info, dsl_types);
+                                        format!("ctx.devalue(pat.{}.{})", name, field_name)
+                                    }
+                                } else {
+                                    format!("ctx.devalue(pat.{})", name)
+                                }
+                            }
+                            Expr::Call(_, sub_func, sub_args) => {
+                                // For nested calls, recursively generate the operation
+                                generate_basic_operation_with_variables(
+                                    sub_func, sub_args, variables, dsl_types,
+                                )
+                            }
+                            Expr::Lit(_, lit) => match lit {
+                                Literal::Int(i) => i.to_string(),
+                                Literal::Float(f) => f.0.to_string(),
+                                Literal::String(s) => format!("\"{}\"", s),
+                                Literal::Bool(b) => b.to_string(),
+                                Literal::Unit => "()".to_string(),
+                            },
+                        }
+                    })
+                    .collect();
+
+                // For basic operations, we just return the computed value
+                format!(
+                    "let computed_value = {};\nlet result = ctx.insert_literal(computed_value);\nctx.union(pat.{}_node1, result);",
+                    operation_args.join(&format!(" {} ", func_name)),
+                    normalize_identifier(&rule_name.to_lowercase())
+                )
+            } else {
+                // Regular function call - check if any arguments contain basic operations
+                let has_basic_operations = args.iter().any(|arg| match arg {
+                    Expr::Call(_, sub_func, _) => is_basic_operation(sub_func),
+                    _ => false,
+                });
+
+                if has_basic_operations {
+                    // Constructor with basic operations in arguments - need to compute values
+                    let computed_args: Vec<String> = args
+                        .iter()
+                        .map(|arg| {
+                            match arg {
+                                Expr::Var(_, name) => {
+                                    // For variables, use ctx.devalue() to get basic values
+                                    if let Some(var_info) =
+                                        variables.iter().find(|v| v.name == *name)
+                                    {
+                                        if is_basic_type(&var_info.var_type) {
+                                            // For basic type variables, access directly
+                                            format!("ctx.devalue(pat.{})", name)
+                                        } else {
+                                            // For complex type variables, access via field
+                                            let field_name =
+                                                get_field_name_for_variable(var_info, dsl_types);
+                                            format!("ctx.devalue(pat.{}.{})", name, field_name)
+                                        }
+                                    } else {
+                                        format!("ctx.devalue(pat.{})", name)
+                                    }
+                                }
+                                Expr::Call(_, sub_func, sub_args) => {
+                                    if is_basic_operation(sub_func) {
+                                        // Generate basic operation with devalue calls
+                                        let operation_args: Vec<String> = sub_args
+                                            .iter()
+                                            .map(|sub_arg| {
+                                                match sub_arg {
+                                                    Expr::Var(_, sub_name) => {
+                                                        if let Some(var_info) = variables
+                                                            .iter()
+                                                            .find(|v| v.name == *sub_name)
+                                                        {
+                                                            let field_name =
+                                                                get_field_name_for_variable(
+                                                                    var_info, dsl_types,
+                                                                );
+                                                            format!(
+                                                                "ctx.devalue(pat.{}.{})",
+                                                                sub_name, field_name
+                                                            )
+                                                        } else {
+                                                            format!("ctx.devalue(pat.{})", sub_name)
+                                                        }
+                                                    }
+                                                    Expr::Call(_, _, _) => {
+                                                        // Recursively handle nested operations
+                                                        generate_basic_operation(
+                                                            sub_func, sub_args, variables,
+                                                            dsl_types,
+                                                        )
+                                                    }
+                                                    Expr::Lit(_, lit) => match lit {
+                                                        Literal::Int(i) => i.to_string(),
+                                                        Literal::Float(f) => f.0.to_string(),
+                                                        Literal::String(s) => format!("\"{}\"", s),
+                                                        Literal::Bool(b) => b.to_string(),
+                                                        Literal::Unit => "()".to_string(),
+                                                    },
+                                                }
+                                            })
+                                            .collect();
+                                        format!(
+                                            "({} {} {})",
+                                            operation_args[0], sub_func, operation_args[1]
+                                        )
+                                    } else {
+                                        // Regular nested function call
+                                        format!(
+                                            "&pat.{}_node2",
+                                            normalize_identifier(&sub_func.to_lowercase())
+                                        )
+                                    }
+                                }
+                                Expr::Lit(_, lit) => match lit {
+                                    Literal::Int(i) => i.to_string(),
+                                    Literal::Float(f) => f.0.to_string(),
+                                    Literal::String(s) => format!("\"{}\"", s),
+                                    Literal::Bool(b) => b.to_string(),
+                                    Literal::Unit => "()".to_string(),
+                                },
+                            }
+                        })
+                        .collect();
+
+                    // For constructors with basic operations, we need to compute the value
+                    format!(
+                        "let computed_value = {};\nlet result = ctx.insert_literal(computed_value);\nctx.union(pat.{}_node1, result);",
+                        computed_args.join(", "),
+                        normalize_identifier(&rule_name.to_lowercase())
+                    )
+                } else {
+                    // Regular function call without basic operations
+                    let mut node_counter = 1;
+                    let arg_refs: Vec<String> = args
+                        .iter()
+                        .map(|arg| {
+                            match arg {
+                                Expr::Var(_, name) => {
+                                    // For variables, check if they are basic types and use ctx.devalue()
+                                    if let Some(var_info) = variables.iter().find(|v| v.name == *name) {
+                                        if is_basic_type(&var_info.var_type) {
+                                            format!("ctx.devalue(pat.{})", name)
+                                        } else {
+                                            format!("&pat.{}", name)
+                                        }
+                                    } else {
+                                        // Fallback to type inference
+                                        let var_type = infer_type_from_expr(arg);
+                                        if is_basic_type(&var_type) {
+                                            format!("ctx.devalue(pat.{})", name)
+                                        } else {
+                                            format!("&pat.{}", name)
+                                        }
+                                    }
+                                }
+                                Expr::Call(_, sub_func, _) => {
+                                    // For nested calls, use the sub-node with counter
+                                    node_counter += 1;
+                                    format!(
+                                        "&pat.{}_node{}",
+                                        normalize_identifier(&sub_func.to_lowercase()),
+                                        node_counter
+                                    )
+                                }
+                                Expr::Lit(_, lit) => match lit {
+                                    Literal::Int(i) => i.to_string(),
+                                    Literal::Float(f) => f.0.to_string(),
+                                    Literal::String(s) => format!("\"{}\"", s),
+                                    Literal::Bool(b) => b.to_string(),
+                                    Literal::Unit => "()".to_string(),
+                                },
+                            }
+                        })
+                        .collect();
+
+                    format!(
+                        "let result = {}::new({});\nctx.union(pat.{}_node1, result);",
+                        normalize_identifier(func_name),
+                        arg_refs.join(", "),
+                        normalize_identifier(&rule_name.to_lowercase())
+                    )
+                }
+            }
+        }
+        Expr::Lit(_, lit) => {
+            // Literal value
+            let value = match lit {
+                Literal::Int(i) => i.to_string(),
+                Literal::Float(f) => f.0.to_string(),
+                Literal::String(s) => format!("\"{}\"", s),
+                Literal::Bool(b) => b.to_string(),
+                Literal::Unit => "()".to_string(),
+            };
+            format!(
+                "let result = ctx.insert_literal({});\nctx.union(pat.{}_node1, result);",
+                value,
+                normalize_identifier(&rule_name.to_lowercase())
+            )
+        }
+    }
+}
+
+/// Get the field name for a variable from DSL type information
+fn get_field_name_for_variable(
+    var_info: &PatternVariable,
+    dsl_types: &HashMap<String, DslType>,
+) -> String {
+    // Try to find the DSL type that contains the variant matching the variable type
+    for (dsl_type_name, dsl_type) in dsl_types {
+        // Look for a variant in this DSL type that matches the variable type
+        if let Some(variant) = dsl_type
+            .variants
+            .iter()
+            .find(|v| v.name == var_info.var_type)
+        {
+            // Use the first field name from this variant
+            if let Some(field) = variant.fields.first() {
+                return field.name.clone();
+            }
+        }
+    }
+
+    // Fallback: try to find any variant with a similar name pattern
+    // This handles cases where the variable type might be a variant of a known DSL type
+    for (_, dsl_type) in dsl_types {
+        for variant in &dsl_type.variants {
+            // If we have at least one field, use the first one
+            if !variant.fields.is_empty() {
+                return variant.fields[0].name.clone();
+            }
+        }
+    }
+
+    // Final fallback
+    format!("UNKNOWN at {}", std::backtrace::Backtrace::capture())
+}
+
 /// Check if a function name represents a basic operation
 fn is_basic_operation(func_name: &str) -> bool {
     let basic_operations = ["+", "-", "*", "/", "<", ">", "<=", ">=", "==", "!="];
     basic_operations.contains(&func_name)
 }
 
-/// Generate basic operation expression
-fn generate_basic_operation(func_name: &str, args: &[Expr]) -> String {
+/// Infer type from node name by extracting the constructor name
+fn infer_type_from_node_name(node_name: &str, dsl_types: &HashMap<String, DslType>) -> String {
+    // Extract constructor name from node name (e.g., "conste_node1" -> "ConstE")
+    if let Some(underscore_pos) = node_name.find('_') {
+        let constructor_part = &node_name[..underscore_pos];
+        // Try to find a matching constructor in DSL types
+        for (dsl_type_name, dsl_type) in dsl_types {
+            for variant in &dsl_type.variants {
+                let normalized_variant = normalize_identifier(&variant.name.to_lowercase());
+                if normalized_variant == constructor_part {
+                    return variant.name.clone();
+                }
+            }
+        }
+        // If no exact match, capitalize the first letter
+        let mut chars = constructor_part.chars();
+        if let Some(first) = chars.next() {
+            let capitalized = first.to_uppercase().collect::<String>() + chars.as_str();
+            return capitalized;
+        }
+    }
+    // Fallback
+    "Expr".to_string()
+}
+
+/// Check if a constructor is a leaf node (has only basic type arguments)
+fn is_leaf_constructor(func_name: &str, dsl_types: &HashMap<String, DslType>) -> bool {
+    // Look for the constructor in DSL types
+    for (_, dsl_type) in dsl_types {
+        if let Some(variant) = dsl_type
+            .variants
+            .iter()
+            .find(|v| v.name == func_name)
+        {
+            // Check if all fields are basic types
+            return variant.fields.iter().all(|field| is_basic_type(&field.field_type));
+        }
+    }
+    false
+}
+
+/// Generate basic operation expression with variable context
+fn generate_basic_operation_with_context(
+    arg: &Expr,
+    func_name: &str,
+    context: &VariableContext,
+    dsl_types: &HashMap<String, DslType>,
+) -> String {
+    match arg {
+        Expr::Var(_, name) => {
+            if let Some((constructor_name, node_name, arg_index)) = context.variable_constructors.get(name) {
+                // Basic type variable accessed through constructor field
+                let field_name = get_field_name_for_variable_in_constructor(constructor_name, *arg_index, dsl_types);
+                format!("ctx.devalue(pat.{}.{})", node_name, field_name)
+            } else {
+                // Complex type variable
+                format!("ctx.devalue(pat.{})", name)
+            }
+        }
+        Expr::Call(_, sub_func, sub_args) => {
+            if is_basic_operation(sub_func) {
+                // Generate basic operation with context
+                let operation_args: Vec<String> = sub_args
+                    .iter()
+                    .map(|sub_arg| generate_basic_operation_with_context(sub_arg, sub_func, context, dsl_types))
+                    .collect();
+                format!("({} {} {})", operation_args[0], sub_func, operation_args[1])
+            } else {
+                // Regular nested function call
+                format!("ctx.devalue(pat.{}_node2)", normalize_identifier(&sub_func.to_lowercase()))
+            }
+        }
+        Expr::Lit(_, lit) => match lit {
+            Literal::Int(i) => i.to_string(),
+            Literal::Float(f) => f.0.to_string(),
+            Literal::String(s) => format!("\"{}\"", s),
+            Literal::Bool(b) => b.to_string(),
+            Literal::Unit => "()".to_string(),
+        },
+    }
+}
+
+/// Generate basic operation expression with variable type information
+fn generate_basic_operation_with_variables(
+    func_name: &str,
+    args: &[Expr],
+    variables: &[PatternVariable],
+    dsl_types: &HashMap<String, DslType>,
+) -> String {
     let arg_strs: Vec<String> = args
         .iter()
-        .map(|arg| {
-            match arg {
-                Expr::Var(_, name) => format!("ctx.devalue(pat.{})", name),
-                Expr::Call(_, sub_func, sub_args) => generate_basic_operation(sub_func, sub_args),
-                Expr::Lit(_, lit) => match lit {
-                    Literal::Int(i) => i.to_string(),
-                    Literal::Float(f) => f.0.to_string(),
-                    Literal::String(s) => format!("\"{}\"", s),
-                    Literal::Bool(b) => b.to_string(),
-                    Literal::Unit => "()".to_string(),
-                },
+        .map(|arg| match arg {
+            Expr::Var(_, name) => {
+                if let Some(var_info) = variables.iter().find(|v| v.name == *name) {
+                    if is_basic_type(&var_info.var_type) {
+                        // For basic type variables, access directly
+                        format!("ctx.devalue(pat.{})", name)
+                    } else {
+                        // For complex type variables, access via field
+                        let field_name = get_field_name_for_variable(var_info, dsl_types);
+                        format!("ctx.devalue(pat.{}.{})", name, field_name)
+                    }
+                } else {
+                    format!("ctx.devalue(pat.{})", name)
+                }
             }
+            Expr::Call(_, sub_func, sub_args) => {
+                generate_basic_operation_with_variables(sub_func, sub_args, variables, dsl_types)
+            }
+            Expr::Lit(_, lit) => match lit {
+                Literal::Int(i) => i.to_string(),
+                Literal::Float(f) => f.0.to_string(),
+                Literal::String(s) => format!("\"{}\"", s),
+                Literal::Bool(b) => b.to_string(),
+                Literal::Unit => "()".to_string(),
+            },
+        })
+        .collect();
+
+    format!("({} {} {})", arg_strs[0], func_name, arg_strs[1])
+}
+
+/// Get the field name for a variable in a specific constructor
+fn get_field_name_for_variable_in_constructor(
+    constructor_name: &str,
+    arg_index: usize,
+    dsl_types: &HashMap<String, DslType>,
+) -> String {
+    // Look for the constructor in DSL types
+    for (_, dsl_type) in dsl_types {
+        if let Some(variant) = dsl_type
+            .variants
+            .iter()
+            .find(|v| v.name == constructor_name)
+        {
+            // Check if we have a field at this argument index
+            if arg_index < variant.fields.len() {
+                return variant.fields[arg_index].name.clone();
+            }
+        }
+    }
+
+    // Fallback: use generic field name
+    format!("arg{}", arg_index)
+}
+
+/// Generate basic operation expression
+fn generate_basic_operation(
+    func_name: &str,
+    args: &[Expr],
+    variables: &[PatternVariable],
+    dsl_types: &HashMap<String, DslType>,
+) -> String {
+    let arg_strs: Vec<String> = args
+        .iter()
+        .map(|arg| match arg {
+            Expr::Var(_, name) => {
+                if let Some(var_info) = variables.iter().find(|v| v.name == *name) {
+                    if is_basic_type(&var_info.var_type) {
+                        // For basic type variables, access directly
+                        format!("ctx.devalue(pat.{})", name)
+                    } else {
+                        // For complex type variables, access via field
+                        let field_name = get_field_name_for_variable(var_info, dsl_types);
+                        format!("ctx.devalue(pat.{}.{})", name, field_name)
+                    }
+                } else {
+                    format!("ctx.devalue(pat.{})", name)
+                }
+            }
+            Expr::Call(_, sub_func, sub_args) => {
+                generate_basic_operation(sub_func, sub_args, variables, dsl_types)
+            }
+            Expr::Lit(_, lit) => match lit {
+                Literal::Int(i) => i.to_string(),
+                Literal::Float(f) => f.0.to_string(),
+                Literal::String(s) => format!("\"{}\"", s),
+                Literal::Bool(b) => b.to_string(),
+                Literal::Unit => "()".to_string(),
+            },
         })
         .collect();
 
