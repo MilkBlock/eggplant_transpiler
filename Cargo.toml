@@ -14,3 +14,7 @@ tempfile = "3.10"
 [[bin]]
 name = "compile_test"
 path = "compile_test.rs"
+
+[[bin]]
+name = "test_transpiler"
+path = "test_transpiler.rs"

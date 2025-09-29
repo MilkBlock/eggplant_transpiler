@@ -71,7 +71,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Total files tested: {}", total_files);
     println!("Compilation success: {}", compile_success);
     println!("Compilation failed: {}", compile_fail);
-    println!("Compilation success rate: {:.1}%", (compile_success as f32 / total_files as f32) * 100.0);
+    println!(
+        "Compilation success rate: {:.1}%",
+        (compile_success as f32 / total_files as f32) * 100.0
+    );
 
     if !failed_files.is_empty() {
         println!("\nFailed files:");
@@ -93,7 +96,11 @@ fn test_compilation(test_crate_dir: &str) -> Result<(), Box<dyn std::error::Erro
     if output.status.success() {
         Ok(())
     } else {
-        Err(format!("Compilation failed: {}", String::from_utf8_lossy(&output.stderr)).into())
+        Err(format!(
+            "Compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into())
     }
 }
 

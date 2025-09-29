@@ -4,11 +4,11 @@
 //! 1. Compilation success
 //! 2. Test execution success (currently returns Error)
 
+use clap::Parser;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use walkdir::WalkDir;
-use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Test compilation of generated Rust files")]
@@ -83,7 +83,10 @@ fn test_all_files() -> Result<(), Box<dyn std::error::Error>> {
     println!("Total files tested: {}", total_files);
     println!("Compilation success: {}", compile_success);
     println!("Compilation failed: {}", compile_fail);
-    println!("Compilation success rate: {:.1}%", (compile_success as f32 / total_files as f32) * 100.0);
+    println!(
+        "Compilation success rate: {:.1}%",
+        (compile_success as f32 / total_files as f32) * 100.0
+    );
 
     Ok(())
 }
@@ -100,9 +103,15 @@ fn test_single_file(file_name: &str) -> Result<(), Box<dyn std::error::Error>> {
         format!("generated/eggplant/tests/{}.rs", base_name),
     ];
 
-    let generated_file_path = possible_paths.iter()
+    let generated_file_path = possible_paths
+        .iter()
         .find(|path| Path::new(path).exists())
-        .ok_or_else(|| format!("Generated file not found for: {}. Tried: {:?}", file_name, possible_paths))?;
+        .ok_or_else(|| {
+            format!(
+                "Generated file not found for: {}. Tried: {:?}",
+                file_name, possible_paths
+            )
+        })?;
 
     println!("\n--- Testing: {} ---", generated_file_path);
 
@@ -200,7 +209,11 @@ path = "{}"
     if output.status.success() {
         Ok(())
     } else {
-        Err(format!("Compilation failed: {}", String::from_utf8_lossy(&output.stderr)).into())
+        Err(format!(
+            "Compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into())
     }
 }
 
