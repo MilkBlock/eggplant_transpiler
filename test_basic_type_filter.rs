@@ -1,14 +1,14 @@
 use eggplant_transpiler::ast::parse::Parser;
-use eggplant_transpiler::eggplant::{EggplantCodeGenerator, convert_to_eggplant_with_source};
+use eggplant_transpiler::eggplant::{convert_to_eggplant_with_source, EggplantCodeGenerator};
 
 fn main() {
-    // Test devalue usage with basic types: (Div a (Const b)) (Const (/ a b))
+    // Test basic type filtering with (Add (Num a) (Num b))
     let program = r#"
         (datatype Expr
-          (Const i64)
-          (Div Expr Expr))
+          (Num i64)
+          (Add Expr Expr))
 
-        (rewrite (Div a (Const b)) (Const (/ a b)))
+        (rewrite (Add (Num a) (Num b)) (Num (+ a b)))
     "#;
 
     let mut parser = Parser::default();

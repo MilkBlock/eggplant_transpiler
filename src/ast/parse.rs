@@ -183,8 +183,19 @@ impl Parser {
         let name = self.parse_symbol()?;
         let mut types = Vec::new();
 
-        while self.peek_token() != Some(&Token::RParen) {
-            types.push(self.parse_symbol()?);
+        // Parse types until we hit a keyword or closing paren
+        while let Some(token) = self.peek_token() {
+            match token {
+                Token::RParen => break,
+                Token::Keyword(_) => break,
+                _ => types.push(self.parse_symbol()?),
+            }
+        }
+
+        // Skip keyword arguments (like :cost)
+        while let Some(Token::Keyword(_)) = self.peek_token() {
+            self.tokens.pop_front(); // Skip keyword
+            self.parse_symbol()?; // Skip value
         }
 
         self.expect_token(Token::RParen)?;
@@ -198,6 +209,12 @@ impl Parser {
     fn parse_constructor(&mut self) -> Result<Command, ParseError> {
         let name = self.parse_symbol()?;
         let schema = self.parse_schema()?;
+
+        // Skip keyword arguments (like :cost)
+        while matches!(self.peek_token(), Some(Token::Keyword(_))) {
+            self.tokens.pop_front(); // Skip keyword
+            self.parse_symbol()?; // Skip value
+        }
 
         Ok(Command::Constructor {
             span: Span::new(self.current_file.clone(), 1, 1),

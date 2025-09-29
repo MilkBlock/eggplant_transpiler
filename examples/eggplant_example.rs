@@ -23,6 +23,10 @@ struct Args {
     #[arg(short, long, default_value_t = false)]
     all: bool,
 
+    /// Generate all files (equivalent to --all)
+    #[arg(long, default_value_t = false)]
+    generate_all: bool,
+
     /// Output directory for generated Rust files
     #[arg(short, long, default_value = "generated/eggplant")]
     output_dir: String,
@@ -34,12 +38,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("=== Eggplant Code Generation Example ===");
 
-    if args.all {
+    if args.all || args.generate_all {
         process_all_files(&args.output_dir)
     } else if let Some(file) = args.file {
         process_single_file(&file, &args.output_dir)
     } else {
-        println!("Please specify either --file <filename> or --all");
+        println!("Please specify either --file <filename> or --all or --generate-all");
         Ok(())
     }
 }

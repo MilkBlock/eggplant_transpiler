@@ -18,3 +18,7 @@ path = "compile_test.rs"
 [[bin]]
 name = "test_transpiler"
 path = "test_transpiler.rs"
+
+[[bin]]
+name = "test_devalue_zero"
+path = "test_devalue_zero.rs"

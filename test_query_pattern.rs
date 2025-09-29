@@ -1,14 +1,16 @@
 use eggplant_transpiler::ast::parse::Parser;
-use eggplant_transpiler::eggplant::{EggplantCodeGenerator, convert_to_eggplant_with_source};
+use eggplant_transpiler::eggplant::convert_to_eggplant_with_source;
 
 fn main() {
-    // Test devalue usage with basic types: (Div a (Const b)) (Const (/ a b))
+    // Test the example from user: (rewrite (g* a (inv a)) I)
     let program = r#"
         (datatype Expr
-          (Const i64)
-          (Div Expr Expr))
+          (Num i64)
+          (Add Expr Expr)
+          (g* Expr Expr)
+          (inv Expr))
 
-        (rewrite (Div a (Const b)) (Const (/ a b)))
+        (rewrite (g* a (inv a)) I)
     "#;
 
     let mut parser = Parser::default();
@@ -28,6 +30,7 @@ fn main() {
     }
 
     // Print the generated Rust code
+    use eggplant_transpiler::eggplant::EggplantCodeGenerator;
     let mut codegen = EggplantCodeGenerator::new();
     let rust_code = codegen.generate_rust(&eggplant_commands);
 

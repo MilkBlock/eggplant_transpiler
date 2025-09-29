@@ -1,14 +1,17 @@
 use eggplant_transpiler::ast::parse::Parser;
-use eggplant_transpiler::eggplant::{EggplantCodeGenerator, convert_to_eggplant_with_source};
+use eggplant_transpiler::eggplant::{convert_to_eggplant_with_source, EggplantCodeGenerator};
 
 fn main() {
-    // Test devalue usage with basic types: (Div a (Const b)) (Const (/ a b))
+    // Test pat_vars with devalue usage
     let program = r#"
         (datatype Expr
           (Const i64)
+          (Mul Expr Expr)
+          (Sub Expr Expr)
+          (Add Expr Expr)
           (Div Expr Expr))
 
-        (rewrite (Div a (Const b)) (Const (/ a b)))
+        (rewrite (Div a (Const 0)) (Const 0))
     "#;
 
     let mut parser = Parser::default();
