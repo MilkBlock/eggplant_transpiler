@@ -3,20 +3,50 @@
 //! This example demonstrates how to convert egglog programs to eggplant
 //! and generate code in multiple target languages.
 
-use eggplant_transpiler::ast::parse::Parser;
+use clap::Parser;
+use eggplant_transpiler::ast::parse::Parser as EggParser;
 use eggplant_transpiler::eggplant::*;
 use eggplant_transpiler::{Expr, Literal, Span};
 use log::{debug, info, warn};
 use std::fs;
+use std::path::Path;
 use walkdir::WalkDir;
+
+#[derive(Parser, Debug)]
+#[command(version, about = "Generate eggplant Rust code from egglog files")]
+struct Args {
+    /// Specific .egg file to process
+    #[arg(short, long)]
+    file: Option<String>,
+
+    /// Process all .egg files in examples folder
+    #[arg(short, long, default_value_t = false)]
+    all: bool,
+
+    /// Output directory for generated Rust files
+    #[arg(short, long, default_value = "generated/eggplant")]
+    output_dir: String,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
+    let args = Args::parse();
+
     info!("=== Eggplant Code Generation Example ===");
 
-    // Traverse all .egg files in examples folder
-    info!("1. Traversing .egg files in examples folder...");
-    let mut parser = Parser::default();
+    if args.all {
+        process_all_files(&args.output_dir)
+    } else if let Some(file) = args.file {
+        process_single_file(&file, &args.output_dir)
+    } else {
+        println!("Please specify either --file <filename> or --all");
+        Ok(())
+    }
+}
+
+fn process_all_files(output_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+    info!("1. Traversing all .egg files in examples folder...");
+    let mut parser = EggParser::default();
     let mut rust_gen = EggplantCodeGenerator::new();
     let mut generated_files = Vec::new();
 
@@ -30,10 +60,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let content = fs::read_to_string(&path)?;
             let commands = parser.get_program_from_string(Some(file_name.clone()), &content)?;
+
+            println!("DEBUG: Parsed {} egglog commands", commands.len());
+            for (i, cmd) in commands.iter().enumerate() {
+                println!("  Command {}: {:?}", i, cmd);
+            }
+
             let eggplant_commands = convert_to_eggplant_with_source(
                 &commands,
                 Some(path.to_string_lossy().to_string()),
             );
+
+            println!(
+                "DEBUG: Generated {} eggplant commands",
+                eggplant_commands.len()
+            );
+            for cmd in &eggplant_commands {
+                match &cmd.command {
+                    EggplantCommand::DslType(dsl_type) => {
+                        println!(
+                            "  - DSL Type: {} with {} variants",
+                            dsl_type.name,
+                            dsl_type.variants.len()
+                        );
+                    }
+                    EggplantCommand::PatternVars(pattern_vars) => {
+                        println!(
+                            "  - PatternVars: {} with {} variables",
+                            pattern_vars.name,
+                            pattern_vars.variables.len()
+                        );
+                    }
+                    EggplantCommand::Rule(rule) => {
+                        println!("  - Rule: {}", rule.name);
+                    }
+                    _ => {
+                        println!("  - Other command: {:?}", cmd.command);
+                    }
+                }
+            }
 
             debug!(
                 "Converted {} egglog commands to {} eggplant commands",
@@ -46,7 +111,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let relative_path = path.strip_prefix("examples").unwrap_or(&path);
             let output_file = format!(
-                "generated/eggplant/{}.rs",
+                "{}/{}.rs",
+                output_dir,
                 relative_path.with_extension("").to_string_lossy()
             );
             if let Some(parent) = std::path::Path::new(&output_file).parent() {
@@ -84,120 +150,84 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("  - {}", file);
     }
 
-    // Demonstrate simple eggplant program
-    info!("9. Demonstrating simple eggplant program...");
+    Ok(())
+}
 
-    let simple_commands = vec![
-        EggplantCommandWithSource {
-            command: EggplantCommand::DslType(DslType {
-                name: "Math".to_string(),
-                variants: vec![
-                    DslVariant {
-                        name: "Num".to_string(),
-                        fields: vec![DslField {
-                            name: "value".to_string(),
-                            field_type: "i64".to_string(),
-                        }],
-                        source_file: Some("examples/simple.egg".to_string()),
-                        source_line: Some(1),
-                    },
-                    DslVariant {
-                        name: "Add".to_string(),
-                        fields: vec![
-                            DslField {
-                                name: "left".to_string(),
-                                field_type: "Math".to_string(),
-                            },
-                            DslField {
-                                name: "right".to_string(),
-                                field_type: "Math".to_string(),
-                            },
-                        ],
-                        source_file: Some("examples/simple.egg".to_string()),
-                        source_line: Some(2),
-                    },
-                ],
-            }),
-            source_file: Some("examples/simple.egg".to_string()),
-            source_line: Some(1),
-        },
-        EggplantCommandWithSource {
-            command: EggplantCommand::PatternVars(PatternVars {
-                name: "AddPat".to_string(),
-                variables: vec![
-                    PatternVariable {
-                        name: "l".to_string(),
-                        var_type: "Num".to_string(),
-                    },
-                    PatternVariable {
-                        name: "r".to_string(),
-                        var_type: "Num".to_string(),
-                    },
-                    PatternVariable {
-                        name: "p".to_string(),
-                        var_type: "Add".to_string(),
-                    },
-                ],
-            }),
-            source_file: Some("examples/simple.egg".to_string()),
-            source_line: Some(2),
-        },
-        EggplantCommandWithSource {
-            command: EggplantCommand::Rule(EggplantRule {
-                name: "add_rule".to_string(),
-                pattern_query: "let l = Num::query();\nlet r = Num::query();\nlet p = Add::query(&l, &r);\nAddPat::new(l, r, p)".to_string(),
-                action: "let cal = ctx.devalue(pat.l.num) + ctx.devalue(pat.r.num);\nlet add_value = ctx.insert_num(cal);\nctx.union(pat.p, add_value);".to_string(),
-                ruleset: "default_ruleset".to_string(),
-            }),
-            source_file: Some("examples/simple.egg".to_string()),
-            source_line: Some(3),
-        },
-        EggplantCommandWithSource {
-            command: EggplantCommand::Rewrite {
-                name: "add_simplify".to_string(),
-                pattern: Expr::Call(
-                    Span::new(None, 1, 1),
-                    "Add".to_string(),
-                    vec![
-                        Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
-                            vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(1))]),
-                        Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
-                            vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(2))])
-                    ]
-                ),
-                replacement: Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
-                    vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(3))]),
-            },
-            source_file: Some("examples/simple.egg".to_string()),
-            source_line: Some(4),
-        },
-        EggplantCommandWithSource {
-            command: EggplantCommand::Assert {
-                expr: Expr::Call(Span::new(None, 1, 1), "eval".to_string(),
-                    vec![Expr::Call(Span::new(None, 1, 1), "Add".to_string(),
-                        vec![
-                            Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
-                                vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(1))]),
-                            Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
-                                vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(2))])
-                        ]
-                    )]
-                ),
-                expected: Expr::Call(Span::new(None, 1, 1), "Num".to_string(),
-                    vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(3))]),
-            },
-            source_file: Some("examples/simple.egg".to_string()),
-            source_line: Some(5),
-        },
-    ];
+fn process_single_file(
+    file_path: &str,
+    output_dir: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    info!("1. Processing single file: {}", file_path);
 
-    let simple_rust = rust_gen.generate_rust(&simple_commands);
+    let mut parser = EggParser::default();
+    let mut rust_gen = EggplantCodeGenerator::new();
 
-    fs::write("generated/eggplant/simple.rs", &simple_rust)?;
+    // Check if file exists
+    if !Path::new(file_path).exists() {
+        // Try to find it in examples directory
+        let examples_path = format!("examples/{}", file_path);
+        if Path::new(&examples_path).exists() {
+            return process_single_file(&examples_path, output_dir);
+        } else {
+            return Err(format!("File not found: {}", file_path).into());
+        }
+    }
 
-    info!("  - generated/eggplant/simple.rs");
+    let content = fs::read_to_string(file_path)?;
+    let file_name = Path::new(file_path)
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
 
-    info!("=== Eggplant Code Generation Complete ===");
+    let commands = parser.get_program_from_string(Some(file_name.clone()), &content)?;
+    let eggplant_commands = convert_to_eggplant_with_source(&commands, Some(file_path.to_string()));
+
+    info!(
+        "Converted {} egglog commands to {} eggplant commands",
+        commands.len(),
+        eggplant_commands.len()
+    );
+
+    let rust_code = rust_gen.generate_rust(&eggplant_commands);
+    info!("Generated {} lines of Rust code", rust_code.lines().count());
+
+    let output_file = format!(
+        "{}/{}.rs",
+        output_dir,
+        Path::new(file_path)
+            .with_extension("")
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+    );
+    if let Some(parent) = std::path::Path::new(&output_file).parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&output_file, &rust_code)?;
+
+    info!("Generated file: {}", output_file);
+
+    // Format the generated Rust code
+    let fmt_result = std::process::Command::new("cargo")
+        .args(["fmt", "--", &output_file])
+        .output();
+
+    match fmt_result {
+        Ok(output) if output.status.success() => {
+            info!("Successfully formatted {}", output_file);
+        }
+        Ok(output) => {
+            warn!(
+                "Failed to format {}: {}",
+                output_file,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Err(e) => {
+            warn!("Failed to run cargo fmt on {}: {}", output_file, e);
+        }
+    }
 
     Ok(())
 }
@@ -205,12 +235,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_eggplant_example() {
         // Test that we can parse and convert egglog files
         let calc_content = fs::read_to_string("examples/calc.egg").unwrap();
-        let mut parser = Parser::default();
+        let mut parser = EggParser::default();
         let commands = parser
             .get_program_from_string(Some("calc.egg".to_string()), &calc_content)
             .unwrap();
