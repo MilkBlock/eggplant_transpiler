@@ -2,13 +2,12 @@ use eggplant_transpiler::ast::parse::Parser;
 use eggplant_transpiler::eggplant::{EggplantCodeGenerator, convert_to_eggplant_with_source};
 
 fn main() {
-    // Test devalue usage with literal zero: (Div a (Const 0)) (Const 0)
+    // Test identifier normalization with ? characters
     let program = r#"
-        (datatype Expr
-          (Const i64)
-          (Div Expr Expr))
+        (datatype Math
+          (Num i64))
 
-        (rewrite (Div a (Const 0)) (Const 0))
+        (rewrite (Add ?a ?b) (Num (+ ?a ?b)))
     "#;
 
     let mut parser = Parser::default();

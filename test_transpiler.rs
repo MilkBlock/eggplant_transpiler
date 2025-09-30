@@ -2,21 +2,34 @@ use eggplant_transpiler::ast::parse::Parser;
 use eggplant_transpiler::eggplant::{EggplantCodeGenerator, convert_to_eggplant_with_source};
 
 fn main() {
-    let program = r#"
+    let _program = r#"
         (datatype ExprE
           (ConstE i64)
-          (DivE ExprE ExprE))
+          (DivE i64 i64))
 
-        (rewrite (DivE (ConstE a) (ConstE b)) (ConstE (/ a b)))
+        (rewrite (DivE a b) (ConstE (/ a b)))
+    "#;
+    let program = r#"
+        (datatype ExprE
+          (ConstE i64 MarkE)
+          (DivE i64 i64))
+
+        (datatype MarkE
+          (Mark i64)
+        )
+
+        (rewrite (DivE a b) (ConstE (/ a b) (Mark 0)))
     "#;
 
     let _program = r#"
-        (datatype ExprE
-          (AddE i64 i64)
-          (ConstE i64)
-          (DivE ExprE ExprE))
+        (datatype Expr
+          (Add Expr Expr)
+          (Mul Expr Expr)
+          (Const i64)
+          (Comb Expr Expr)
+        )
 
-        (rewrite (AddE (ConstE a) (ConstE b)) (ConstE (+ a b)))
+        (rewrite (Add (Mul a b) (Mul a b)) (Mul (Add a b) (Add a b)))
     "#;
 
     let mut parser = Parser::default();

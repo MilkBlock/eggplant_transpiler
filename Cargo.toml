@@ -22,3 +22,11 @@ path = "test_transpiler.rs"
 [[bin]]
 name = "test_devalue_zero"
 path = "test_devalue_zero.rs"
+
+[[bin]]
+name = "test_devalue_simple"
+path = "test_devalue_simple.rs"
+
+[[bin]]
+name = "test_question_mark"
+path = "test_question_mark.rs"
