@@ -31,7 +31,49 @@ fn main() {
 
         (rewrite (Add (Mul a b) (Mul a b)) (Mul (Add a b) (Add a b)))
     "#;
+    let program = "(datatype LoopType (Loop String Math))
+(datatype*
+ 	(Expr
+  		; General kernel stuff
+     	(GMEM String)
+     	(LoopIn Expr LoopType Math)
+     	(LoopOut Expr LoopType Math)
+      	(SMEM)
+       	(SMEMLoad Expr Expr)
+        (SMEMRead Expr Expr)
 
+        ; Unary Ops
+     	(Exp2 Expr)
+      	(Log2 Expr)
+    	(Sqrt Expr)
+     	(Sin Expr)
+      	(Recip Expr)
+       	(Neg Expr)
+
+        ; Binary Ops
+     	(Add Expr Expr)
+     	(Mul Expr Expr)
+      	(Max Expr Expr)
+
+        ; search helpers
+        (Unary String Expr)
+     	(Binary String Expr Expr)
+      	(SwapLoops Expr String String) ; Swap two loops, identified by their string
+       	(TileLoop Expr String) ; Tile a loop, identified by it's string
+        (UnpadLoop Expr String) ; Remove a padding loop, identified by it's string
+     )
+)";
+    let program = r#"(datatype
+ 	Expr
+     	(Sin Expr)
+        (Unary String Expr)
+
+)
+       (rewrite (Unary "Sin" ?x) (Sin ?x))
+ 
+        "#;
+
+    env_logger::init();
     let mut parser = Parser::default();
     let commands = parser.get_program_from_string(None, program).unwrap();
 
@@ -54,4 +96,12 @@ fn main() {
 
     println!("\n=== Generated Rust Code ===");
     println!("{}", rust_code);
+
+    // Save the generated code to a file
+    let output_path = "generated/eggplant/code.rs";
+    if let Some(parent) = std::path::Path::new(output_path).parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(output_path, &rust_code).expect("Failed to write generated code");
+    println!("\n✅ File has been saved to: {}", output_path);
 }

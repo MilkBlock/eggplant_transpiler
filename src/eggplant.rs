@@ -2,6 +2,9 @@
 //!
 //! Eggplant is a simplified version of egglog with focus on educational examples
 
+use heck::ToSnakeCase;
+use walkdir::IntoIter;
+
 use crate::ast::*;
 use std::collections::HashMap;
 
@@ -545,7 +548,7 @@ impl EggplantCodeGenerator {
             Expr::Lit(_, lit) => match lit {
                 Literal::Int(i) => i.to_string(),
                 Literal::Float(f) => f.0.to_string(),
-                Literal::String(s) => format!("'{}'", s),
+                Literal::String(s) => format!("\"{}\"", s),
                 Literal::Bool(b) => b.to_string(),
                 Literal::Unit => "()".to_string(),
             },
@@ -593,7 +596,13 @@ impl EggplantCodeGenerator {
     /// Check if a type is a basic type (i64, f64, bool, String, etc.)
     fn is_basic_type(&self, type_name: &str) -> bool {
         let basic_types = ["i64", "f64", "bool", "String", "()"];
-        basic_types.contains(&type_name) || type_name.starts_with('&')
+        let rst = basic_types.contains(&type_name) || type_name.starts_with('&');
+        if rst {
+            println!("{} is basic type", type_name);
+        } else {
+            println!("{} is complex type", type_name);
+        }
+        rst
     }
 
     fn add_line(&mut self, line: &str) {
@@ -662,11 +671,7 @@ pub fn convert_to_eggplant_with_source(
         }
     }
 
-    let mut line_counter = 1;
-
     for command in commands {
-        line_counter += 1;
-
         match command {
             Command::Datatype {
                 name,
@@ -707,7 +712,7 @@ pub fn convert_to_eggplant_with_source(
                 eggplant_commands.push(EggplantCommandWithSource {
                     command: EggplantCommand::DslType(dsl_type),
                     source_file: source_file.clone(),
-                    source_line: Some(line_counter),
+                    source_line: Some(span.line),
                 });
             }
             // Command::Constructor { name, schema, .. } => {
@@ -726,7 +731,7 @@ pub fn convert_to_eggplant_with_source(
             //             })
             //             .collect(),
             //         source_file: source_file.clone(),
-            //         source_line: Some(line_counter),
+            //         source_line: Some(span.line),
             //     };
 
             //     // Debug logging
@@ -759,11 +764,13 @@ pub fn convert_to_eggplant_with_source(
             //                 variants: vec![dsl_variant],
             //             }),
             //             source_file: source_file.clone(),
-            //             source_line: Some(line_counter),
+            //             source_line: Some(span.line),
             //         });
             //     }
             // }
-            Command::Function { name, schema, .. } => {
+            Command::Function {
+                name, schema, span, ..
+            } => {
                 // Create pattern variables for function - these are the matched nodes
                 let pattern_vars = PatternVars {
                     name: format!("{}Pat", normalize_identifier(name)),
@@ -781,7 +788,7 @@ pub fn convert_to_eggplant_with_source(
                 eggplant_commands.push(EggplantCommandWithSource {
                     command: EggplantCommand::PatternVars(pattern_vars),
                     source_file: source_file.clone(),
-                    source_line: Some(line_counter),
+                    source_line: Some(span.line),
                 });
 
                 // Create rule for function
@@ -798,14 +805,14 @@ pub fn convert_to_eggplant_with_source(
                 eggplant_commands.push(EggplantCommandWithSource {
                     command: EggplantCommand::Rule(rule),
                     source_file: source_file.clone(),
-                    source_line: Some(line_counter),
+                    source_line: Some(span.line),
                 });
             }
             Command::Rule { name, rule, .. } => {
                 // For rules, we need to analyze the pattern to determine what nodes are matched
                 // For now, create a simple pattern with generic nodes
                 let unique_name = if name == "default" {
-                    format!("rule_{}", line_counter)
+                    format!("rule_{}", rule.span.line)
                 } else {
                     normalize_identifier(name)
                 };
@@ -830,7 +837,7 @@ pub fn convert_to_eggplant_with_source(
                 eggplant_commands.push(EggplantCommandWithSource {
                     command: EggplantCommand::PatternVars(pattern_vars),
                     source_file: source_file.clone(),
-                    source_line: Some(line_counter),
+                    source_line: Some(rule.span.line),
                 });
 
                 // Create rule with proper pattern query
@@ -854,13 +861,13 @@ pub fn convert_to_eggplant_with_source(
                 eggplant_commands.push(EggplantCommandWithSource {
                     command: EggplantCommand::Rule(eggplant_rule),
                     source_file: source_file.clone(),
-                    source_line: Some(line_counter),
+                    source_line: Some(rule.span.line),
                 });
             }
             Command::Rewrite(name, rewrite, _) => {
                 // Analyze the rewrite pattern to extract variables and structure
                 // Always use line counter for unique pattern variable names to avoid conflicts
-                let unique_name = format!("rule_{}", line_counter);
+                let unique_name = format!("rule_{}", rewrite.span.line);
                 let (pattern_vars, pattern_query, context) =
                     analyze_rewrite_pattern(&rewrite.lhs, &unique_name, &dsl_types);
 
@@ -868,7 +875,7 @@ pub fn convert_to_eggplant_with_source(
                 eggplant_commands.push(EggplantCommandWithSource {
                     command: EggplantCommand::PatternVars(pattern_vars),
                     source_file: source_file.clone(),
-                    source_line: Some(line_counter),
+                    source_line: Some(rewrite.span.line),
                 });
 
                 // Create rule with pattern query and action
@@ -889,10 +896,10 @@ pub fn convert_to_eggplant_with_source(
                 eggplant_commands.push(EggplantCommandWithSource {
                     command: EggplantCommand::Rule(rule),
                     source_file: source_file.clone(),
-                    source_line: Some(line_counter),
+                    source_line: Some(rewrite.span.line),
                 });
             }
-            Command::Check(_, facts) => {
+            Command::Check(span, facts) => {
                 for fact in facts {
                     if let Fact::Eq(_, e1, e2) = fact {
                         eggplant_commands.push(EggplantCommandWithSource {
@@ -901,24 +908,26 @@ pub fn convert_to_eggplant_with_source(
                                 expected: e2.clone(),
                             },
                             source_file: source_file.clone(),
-                            source_line: Some(line_counter),
+                            source_line: Some(span.line),
                         });
                     }
                 }
             }
-            Command::Constructor { name, schema, .. } => {
+            Command::Constructor {
+                name, schema, span, ..
+            } => {
                 // Constructor commands are already handled above
                 // Skip duplicate processing
             }
             Command::Action(action) => {
-                if let Action::Let(_, var, expr) = action {
+                if let Action::Let(span, var, expr) = action {
                     eggplant_commands.push(EggplantCommandWithSource {
                         command: EggplantCommand::Let {
                             var: normalize_identifier(var),
                             expr: expr.clone(),
                         },
                         source_file: source_file.clone(),
-                        source_line: Some(line_counter),
+                        source_line: Some(span.line),
                     });
                 }
             }
@@ -926,17 +935,17 @@ pub fn convert_to_eggplant_with_source(
                 eggplant_commands.push(EggplantCommandWithSource {
                     command: EggplantCommand::Commit("current_expr".to_string()),
                     source_file: source_file.clone(),
-                    source_line: Some(line_counter),
+                    source_line: Some(1), // Default line for Push command
                 });
             }
-            Command::Pop(_, _) => {
+            Command::Pop(span, _) => {
                 eggplant_commands.push(EggplantCommandWithSource {
                     command: EggplantCommand::Pull("current_expr".to_string()),
                     source_file: source_file.clone(),
-                    source_line: Some(line_counter),
+                    source_line: Some(span.line),
                 });
             }
-            Command::Sort(_, name, _) => {
+            Command::Sort(span, name, _) => {
                 // Sort command defines a basic type
                 // Use the collected constructors for this sort
                 let dsl_variants = datatype_constructors
@@ -953,7 +962,7 @@ pub fn convert_to_eggplant_with_source(
                 eggplant_commands.push(EggplantCommandWithSource {
                     command: EggplantCommand::DslType(dsl_type),
                     source_file: source_file.clone(),
-                    source_line: Some(line_counter),
+                    source_line: Some(span.line),
                 });
             }
             _ => {
@@ -966,12 +975,12 @@ pub fn convert_to_eggplant_with_source(
     eggplant_commands.push(EggplantCommandWithSource {
         command: EggplantCommand::Ruleset("default_ruleset".to_string()),
         source_file: source_file.clone(),
-        source_line: Some(line_counter),
+        source_line: Some(1), // Default line number
     });
     eggplant_commands.push(EggplantCommandWithSource {
         command: EggplantCommand::RunRuleset("MyTx".to_string(), "Sat".to_string()),
         source_file: source_file.clone(),
-        source_line: Some(line_counter),
+        source_line: Some(1), // Default line number
     });
 
     eggplant_commands
@@ -1009,7 +1018,7 @@ fn is_basic_type(type_name: &str) -> bool {
 fn infer_type_from_expr(expr: &Expr) -> String {
     match expr {
         Expr::Call(_, func_name, _) => normalize_identifier(func_name),
-        Expr::Var(_, _) => "Expr".to_string(), // Default type for variables
+        Expr::Var(sp, name) => format!("{:?} {name} UNKNOWN TYPE", sp), // Default type for variables
         Expr::Lit(_, lit) => match lit {
             Literal::Int(_) => "i64".to_string(),
             Literal::Float(_) => "f64".to_string(),
@@ -1022,7 +1031,6 @@ fn infer_type_from_expr(expr: &Expr) -> String {
 
 /// Infer variable type from constructor context using DSL type information
 fn infer_variable_type_from_constructor(
-    var_name: &str,
     constructor_name: &str,
     arg_index: usize,
     dsl_types: &HashMap<String, DslType>,
@@ -1037,27 +1045,18 @@ fn infer_variable_type_from_constructor(
         {
             // Check if we have a field at this argument index
             if arg_index < variant.fields.len() {
+                println!("{} infer to be {}", constructor_name, dsl_type_name);
                 return variant.fields[arg_index].field_type.clone();
             } else {
+                println!("{} infer to be {}", constructor_name, dsl_type_name);
                 // If no field at this index, return the DSL type name
                 return dsl_type_name.clone();
             }
         }
     }
 
-    // Fallback: if constructor not found in DSL types, use simplified inference
-    match constructor_name {
-        "Const" => "Const".to_string(),
-        "Div" => match arg_index {
-            0 => "Const".to_string(),
-            1 => "Const".to_string(),
-            _ => "Expr".to_string(),
-        },
-        "Add" => "Expr".to_string(),
-        "Sub" => "Expr".to_string(),
-        "Mul" => "Expr".to_string(),
-        _ => "Expr".to_string(),
-    }
+    // Fallback: if constructor not found in DSL types, panic
+    panic!("unable to infer {constructor_name}")
 }
 
 /// Generate better pattern query with type inference and variable context
@@ -1106,22 +1105,23 @@ fn generate_pattern_query_with_context(
                 });
 
             if has_basic_type_fields {
-                pattern_vars_variables.push(PatternVariable {
+                pattern_vars_variables.push(dbg!(PatternVariable {
                     name: node_name.clone(),
                     var_type: constructor_name.clone(),
-                });
+                }));
             }
         }
     }
 
     // For rewrite rules, add the root node to PatternVars for union operation
+    let mut pattern_vars_variables = dbg!(pattern_vars_variables);
     if !pattern_vars_variables.iter().any(|v| v.name == root_node) {
         // Infer the type of the root node
         let root_node_type = infer_type_from_expr(lhs);
-        pattern_vars_variables.push(PatternVariable {
+        pattern_vars_variables.push(dbg!(PatternVariable {
             name: root_node.clone(),
             var_type: root_node_type,
-        });
+        }));
     }
 
     // Generate improved pattern query
@@ -1169,20 +1169,20 @@ fn extract_variables_with_types_and_context(
             let normalized_var_name = normalize_identifier(var_name);
             if !is_basic_type(&var_type) && !variables.iter().any(|v| v.name == normalized_var_name)
             {
-                variables.push(PatternVariable {
+                variables.push(dbg!(PatternVariable {
                     name: normalized_var_name.clone(),
                     var_type: var_type.clone(),
-                });
+                }));
                 // For complex types, add query
                 let query_method = if is_leaf_constructor(&var_type, dsl_types) {
-                    "query_leaf"
+                    "query"
                 } else {
                     "query"
                 };
-                pattern_query_parts.push(format!(
+                pattern_query_parts.push(dbg!(format!(
                     "let {} = {}::{}();",
                     normalized_var_name, var_type, query_method
-                ));
+                )));
                 // Add variable node to all nodes
                 all_nodes.push(normalized_var_name.clone());
             }
@@ -1197,7 +1197,7 @@ fn extract_variables_with_types_and_context(
             *node_counter += 1;
             let constructor_node_name = format!(
                 "{}_node{}",
-                normalize_identifier(&func_name.to_lowercase()),
+                normalize_identifier(&func_name.to_snake_case()),
                 node_counter
             );
 
@@ -1206,7 +1206,7 @@ fn extract_variables_with_types_and_context(
                 let arg_node = if let Expr::Var(_, var_name) = arg {
                     // This variable appears in a constructor call - infer its type
                     let inferred_type =
-                        infer_variable_type_from_constructor(var_name, func_name, index, dsl_types);
+                        infer_variable_type_from_constructor(func_name, index, dsl_types);
 
                     // Record the constructor context for this variable - use shared constructor node
                     let normalized_var_name = normalize_identifier(var_name);
@@ -1220,20 +1220,20 @@ fn extract_variables_with_types_and_context(
                     if !is_basic_type(&inferred_type)
                         && !variables.iter().any(|v| v.name == normalized_var_name)
                     {
-                        variables.push(PatternVariable {
+                        variables.push(dbg!(PatternVariable {
                             name: normalized_var_name.clone(),
                             var_type: inferred_type.clone(),
-                        });
+                        }));
                         // For complex types, add query
                         let query_method = if is_leaf_constructor(&inferred_type, dsl_types) {
-                            "query_leaf"
+                            format!(r#"query_leaf /* infered as {} */"#, inferred_type)
                         } else {
-                            "query"
+                            format!(r#"query_leaf /* infered as {} */"#, inferred_type)
                         };
-                        pattern_query_parts.push(format!(
+                        pattern_query_parts.push(dbg!(format!(
                             "let {} = {}::{}();",
                             normalized_var_name, inferred_type, query_method
-                        ));
+                        )));
                     }
                     normalized_var_name
                 } else {
@@ -1250,7 +1250,7 @@ fn extract_variables_with_types_and_context(
                 };
 
                 // Check if this argument is a basic type (literal or basic type variable)
-                let arg_type = infer_type_from_expr(arg);
+                let arg_type = infer_variable_type_from_constructor(func_name, index, dsl_types);
                 if is_basic_type(&arg_type) {
                     // For basic types, create StrippedCondition instead of query parameter
                     if let Expr::Var(_, var_name) = arg {
@@ -1270,6 +1270,7 @@ fn extract_variables_with_types_and_context(
                 } else {
                     // For complex types, add to argument nodes only if this is not a leaf constructor
                     if !is_leaf_constructor(func_name, dsl_types) {
+                        println!("push {}:{}", arg_node, arg_type);
                         complex_arg_nodes.push(arg_node);
                     }
                 }
@@ -1295,12 +1296,13 @@ fn extract_variables_with_types_and_context(
                 constructor_node_name
             } else {
                 // Generate unique node name for internal constructors
-                *node_counter += 1;
-                format!(
-                    "{}_node{}",
-                    normalize_identifier(&func_name.to_lowercase()),
-                    node_counter
-                )
+                // *node_counter += 1;
+                // format!(
+                //     "{}_node{}",
+                //     normalize_identifier(&func_name.to_snake_case()),
+                //     node_counter
+                // )
+                constructor_node_name
             };
 
             // Add this node to the list of all nodes
@@ -1318,6 +1320,7 @@ fn extract_variables_with_types_and_context(
                     {
                         node_name.clone()
                     } else {
+                        println!(" recog as complex {:?}", node_name);
                         format!("&{}", node_name)
                     }
                 })
@@ -1332,28 +1335,28 @@ fn extract_variables_with_types_and_context(
                     .iter()
                     .any(|part| part.contains(&node_name))
                 {
-                    pattern_query_parts.push(format!(
-                        "let {} = {}::query_leaf();",
+                    pattern_query_parts.push(dbg!(format!(
+                        "let {} = {}::query();",
                         node_name,
                         normalize_identifier(func_name)
-                    ));
+                    )));
                 }
             } else {
                 // Internal nodes use query() with arguments
-                pattern_query_parts.push(format!(
+                pattern_query_parts.push(dbg!(format!(
                     "let {} = {}::query({});",
                     node_name,
                     normalize_identifier(func_name),
                     arg_refs.join(", ")
-                ));
+                )));
             }
 
             // Add StrippedCondition checks for basic types
             if !basic_conditions.is_empty() {
-                pattern_query_parts.push(format!(
+                pattern_query_parts.push(dbg!(format!(
                     "// StrippedCondition checks: {}",
                     basic_conditions.join(" && ")
-                ));
+                )));
             }
 
             node_name
@@ -1427,7 +1430,7 @@ fn generate_rewrite_action_with_context(
                 .find(|v| !is_basic_type(&v.var_type))
                 .map(|v| v.name.clone())
                 .unwrap_or_else(|| {
-                    format!("{}_node1", normalize_identifier(&rule_name.to_lowercase()))
+                    format!("{}_node1", normalize_identifier(&rule_name.to_snake_case()))
                 })
         });
 
@@ -1473,21 +1476,24 @@ fn generate_insert_expr(
                     );
                     format!("ctx.devalue(pat.{}.{})", node_name, field_name)
                 } else {
+                    // TODO insert function might be different when insert container
                     // Complex type variable - use the variable directly
                     if let Some(var_info) = context
                         .variables
                         .iter()
                         .find(|v| v.name == normalized_var_name)
                     {
-                        let insert_function =
-                            format!("insert_{}", var_info.var_type.to_lowercase());
-                        format!("ctx.{}(pat.{})", insert_function, normalized_var_name)
+                        // let insert_function =
+                        //     format!("insert_{}", var_info.var_type.to_snake_case());
+                        // format!("ctx.{}(pat.{})", insert_function, normalized_var_name)
+                        format!("pat.{}", normalized_var_name)
                     } else {
                         // Fallback for complex type variables
                         format!("pat.{}", normalized_var_name)
                     }
                 }
             } else {
+                // TODO insert function might be different when insert container
                 // Complex type variable - we need to access its fields
                 // Find the variable type and generate appropriate insert function
                 if let Some(var_info) = context
@@ -1495,8 +1501,9 @@ fn generate_insert_expr(
                     .iter()
                     .find(|v| v.name == normalized_var_name)
                 {
-                    let insert_function = format!("insert_{}", var_info.var_type.to_lowercase());
-                    format!("ctx.{}(pat.{})", insert_function, normalized_var_name)
+                    // let insert_function = format!("insert_{}", var_info.var_type.to_snake_case());
+                    // format!("ctx.{}(pat.{})", insert_function, normalized_var_name)
+                    format!("pat.{}", normalized_var_name)
                 } else {
                     // Fallback for complex type variables
                     format!("pat.{}", normalized_var_name)
@@ -1540,7 +1547,7 @@ fn generate_insert_expr(
                     .collect();
 
                 // Generate the correct insert function name based on variant
-                let insert_function = format!("insert_{}", func_name.to_lowercase());
+                let insert_function = format!("insert_{}", func_name.to_snake_case());
 
                 // For complex types, we need to ensure the arguments are in the correct order
                 // based on the variant's field declarations

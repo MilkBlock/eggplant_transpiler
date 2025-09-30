@@ -1,10 +1,8 @@
 pub mod ast;
-pub mod codegen;
 pub mod eggplant;
+pub use eggplant::*;
 
 pub use ast::*;
-pub use codegen::*;
-pub use eggplant::*;
 
 #[cfg(test)]
 mod tests {
