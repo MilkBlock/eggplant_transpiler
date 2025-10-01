@@ -2,10 +2,8 @@
 //!
 //! Eggplant is a simplified version of egglog with focus on educational examples
 
-use heck::ToSnakeCase;
-use walkdir::IntoIter;
-
 use crate::ast::*;
+use heck::ToSnakeCase;
 use std::collections::HashMap;
 
 /// Eggplant DSL type definition

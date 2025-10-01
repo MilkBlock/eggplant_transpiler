@@ -6,11 +6,9 @@
 use clap::Parser;
 use eggplant_transpiler::ast::parse::Parser as EggParser;
 use eggplant_transpiler::eggplant::*;
-use eggplant_transpiler::{Expr, Literal, Span};
 use log::{debug, info, warn};
 use std::fs;
 use std::path::Path;
-use walkdir::WalkDir;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Generate eggplant Rust code from egglog files")]
