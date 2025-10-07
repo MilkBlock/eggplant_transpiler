@@ -1,9 +1,9 @@
 pub mod expr;
 pub mod parse;
 
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Span {
     pub file: Option<String>,
     pub line: usize,
@@ -123,6 +123,54 @@ pub struct GenericRule<Head, Leaf> {
     pub head: Vec<GenericAction<Head, Leaf>>,
     pub body: Vec<GenericFact<Head, Leaf>>,
 }
+impl<Head, Leaf> GenericRule<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display,
+{
+    pub(crate) fn fmt_with_ruleset(
+        &self,
+        f: &mut Formatter,
+        ruleset: &str,
+        name: &str,
+    ) -> std::fmt::Result {
+        let indent = " ".repeat(7);
+        write!(f, "(rule (")?;
+        for (i, fact) in self.body.iter().enumerate() {
+            if i > 0 {
+                write!(f, "{}", indent)?;
+            }
+
+            if i != self.body.len() - 1 {
+                writeln!(f, "{}", fact)?;
+            } else {
+                write!(f, "{}", fact)?;
+            }
+        }
+        write!(f, ")\n      (")?;
+        for (i, action) in self.head.iter().enumerate() {
+            if i > 0 {
+                write!(f, "{}", indent)?;
+            }
+            if i != self.head.len() - 1 {
+                writeln!(f, "{}", action)?;
+            } else {
+                write!(f, "{}", action)?;
+            }
+        }
+        let ruleset = if !ruleset.is_empty() {
+            format!(":ruleset {}", ruleset)
+        } else {
+            "".into()
+        };
+        let name = if !name.is_empty() {
+            format!(":name \"{}\"", name)
+        } else {
+            "".into()
+        };
+        write!(f, ")\n{} {} {})", indent, ruleset, name)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Schema {
@@ -171,6 +219,7 @@ pub enum GenericCommand<Head, Leaf> {
         span: Span,
         name: String,
         schema: Schema,
+        cost: Option<usize>,
     },
     Relation {
         span: Span,
@@ -203,28 +252,40 @@ pub enum GenericCommand<Head, Leaf> {
     Include(Span, String),
     Fail(Span, Box<GenericCommand<Head, Leaf>>),
 }
-
-impl<Head: Display, Leaf: Display> Display for GenericCommand<Head, Leaf> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl<Head, Leaf> Display for GenericCommand<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display,
+{
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericCommand::Sort(_span, name, None) => write!(f, "(sort {})", name),
-            GenericCommand::Sort(_span, name, Some((name2, args))) => {
-                write!(f, "(sort {} ({} {}))", name, name2, ListDisplay(args, " "))
+            GenericCommand::Rewrite(name, rewrite, subsume) => {
+                rewrite.fmt_with_ruleset(f, name, false, *subsume)
+            }
+            GenericCommand::BiRewrite(name, rewrite) => {
+                rewrite.fmt_with_ruleset(f, name, true, false)
             }
             GenericCommand::Datatype {
                 span: _,
                 name,
                 variants,
-            } => write!(f, "(datatype {} {})", name, ListDisplay(variants, " ")),
+            } => write!(f, "(datatype {name} {})", ListDisplay(variants, " ")),
+            GenericCommand::Action(a) => write!(f, "{a}"),
+            GenericCommand::Sort(_span, name, None) => write!(f, "(sort {name})"),
+            GenericCommand::Sort(_span, name, Some((name2, args))) => {
+                write!(f, "(sort {name} ({name2} {}))", ListDisplay(args, " "))
+            }
             GenericCommand::Function {
                 span: _,
                 name,
                 schema,
                 merge,
             } => {
-                write!(f, "(function {} {}", name, schema)?;
-                if let Some(merge) = merge {
-                    write!(f, " :merge {}", merge)?;
+                write!(f, "(function {name} {schema}")?;
+                if let Some(merge) = &merge {
+                    write!(f, " :merge {merge}")?;
+                } else {
+                    write!(f, " :no-merge")?;
                 }
                 write!(f, ")")
             }
@@ -232,79 +293,45 @@ impl<Head: Display, Leaf: Display> Display for GenericCommand<Head, Leaf> {
                 span: _,
                 name,
                 schema,
-            } => write!(f, "(constructor {} {})", name, schema),
+                cost,
+            } => {
+                write!(f, "(constructor {name} {schema}")?;
+                if let Some(cost) = cost {
+                    write!(f, " :cost {cost}")?;
+                }
+                write!(f, ")")
+            }
             GenericCommand::Relation {
                 span: _,
                 name,
                 inputs,
-            } => write!(f, "(relation {} ({}))", name, ListDisplay(inputs, " ")),
-            GenericCommand::AddRuleset(_span, name) => write!(f, "(ruleset {})", name),
+            } => {
+                write!(f, "(relation {name} ({}))", ListDisplay(inputs, " "))
+            }
+            GenericCommand::AddRuleset(_span, name) => write!(f, "(ruleset {name})"),
             GenericCommand::Rule {
                 ruleset,
                 name,
                 rule,
-            } => {
-                write!(f, "(rule (")?;
-                for (i, fact) in rule.body.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "{}", fact)?;
-                }
-                write!(f, ") (")?;
-                for (i, action) in rule.head.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, " ")?;
-                    }
-                    write!(f, "{}", action)?;
-                }
-                write!(f, ") :ruleset {} :name \"{}\")", ruleset, name)
-            }
-            GenericCommand::Rewrite(name, rewrite, subsume) => {
-                write!(f, "(rewrite {} {}", rewrite.lhs, rewrite.rhs)?;
-                if *subsume {
-                    write!(f, " :subsume")?;
-                }
-                if !rewrite.conditions.is_empty() {
-                    write!(f, " :when ({})", ListDisplay(&rewrite.conditions, " "))?;
-                }
-                write!(f, " :ruleset {})", name)
-            }
-            GenericCommand::BiRewrite(name, rewrite) => {
-                write!(f, "(birewrite {} {}", rewrite.lhs, rewrite.rhs)?;
-                if !rewrite.conditions.is_empty() {
-                    write!(f, " :when ({})", ListDisplay(&rewrite.conditions, " "))?;
-                }
-                write!(f, " :ruleset {})", name)
-            }
-            GenericCommand::Action(a) => write!(f, "{}", a),
+            } => rule.fmt_with_ruleset(f, ruleset, name),
             GenericCommand::Check(_ann, facts) => {
-                write!(f, "(check {})", ListDisplay(facts, " "))
+                write!(f, "(check {})", ListDisplay(facts, "\n"))
             }
-            GenericCommand::Push(n) => write!(f, "(push {})", n),
-            GenericCommand::Pop(_span, n) => write!(f, "(pop {})", n),
-            GenericCommand::PrintFunction(_span, name, n, file) => {
-                write!(f, "(print-function {}", name)?;
-                if let Some(n) = n {
-                    write!(f, " {}", n)?;
-                }
-                if let Some(file) = file {
-                    write!(f, " :file \"{}\"", file)?;
-                }
-                write!(f, ")")
-            }
+            GenericCommand::Push(n) => write!(f, "(push {n})"),
+            GenericCommand::Pop(_span, n) => write!(f, "(pop {n})"),
             GenericCommand::Input {
                 span: _,
                 name,
                 file,
-            } => write!(f, "(input {} \"{}\")", name, file),
+            } => write!(f, "(input {name} {file:?})"),
             GenericCommand::Output {
                 span: _,
                 file,
                 exprs,
-            } => write!(f, "(output \"{}\" {})", file, ListDisplay(exprs, " ")),
-            GenericCommand::Include(_span, file) => write!(f, "(include \"{}\")", file),
-            GenericCommand::Fail(_span, cmd) => write!(f, "(fail {})", cmd),
+            } => write!(f, "(output {file:?} {})", ListDisplay(exprs, " ")),
+            GenericCommand::Fail(_span, cmd) => write!(f, "(fail {cmd})"),
+            GenericCommand::Include(_span, file) => write!(f, "(include {file:?})"),
+            GenericCommand::PrintFunction(span, _, _, _) => todo!(),
         }
     }
 }
@@ -335,5 +362,33 @@ impl<'a, T: Display> Display for ListDisplay<'a, T> {
             write!(f, "{}", item)?;
         }
         Ok(())
+    }
+}
+
+impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
+    /// Converts the rewrite into an s-expression.
+    pub fn fmt_with_ruleset(
+        &self,
+        f: &mut Formatter,
+        ruleset: &str,
+        is_bidirectional: bool,
+        subsume: bool,
+    ) -> std::fmt::Result {
+        let direction = if is_bidirectional {
+            "birewrite"
+        } else {
+            "rewrite"
+        };
+        write!(f, "({direction} {} {}", self.lhs, self.rhs)?;
+        if subsume {
+            write!(f, " :subsume")?;
+        }
+        if !self.conditions.is_empty() {
+            write!(f, " :when ({})", ListDisplay(&self.conditions, " "))?;
+        }
+        if !ruleset.is_empty() {
+            write!(f, " :ruleset {ruleset}")?;
+        }
+        write!(f, ")")
     }
 }

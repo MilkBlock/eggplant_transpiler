@@ -44,16 +44,17 @@ pub struct PatternVariable {
 }
 
 /// Eggplant rule definition
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct EggplantRule {
     pub name: String,
     pub pattern_query: String,
     pub action: String,
     pub ruleset: String,
+    pub src_expr: Command,
 }
 
 /// Eggplant-specific AST nodes
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum EggplantCommand {
     /// Define a DSL type with #[eggplant::dsl]
     DslType(DslType),
@@ -73,12 +74,6 @@ pub enum EggplantCommand {
     Transaction(String),
     /// Pattern recorder definition
     PatternRecorder(String),
-    /// Simple rewrite rule
-    Rewrite {
-        name: String,
-        pattern: Expr,
-        replacement: Expr,
-    },
     /// Test assertion
     Assert { expr: Expr, expected: Expr },
     /// Variable assignment
@@ -88,7 +83,7 @@ pub enum EggplantCommand {
 }
 
 /// Eggplant command with source file information
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct EggplantCommandWithSource {
     pub command: EggplantCommand,
     pub source_file: Option<String>,
@@ -99,8 +94,6 @@ pub struct EggplantCommandWithSource {
 pub struct EggplantCodeGenerator {
     output: String,
     indent_level: usize,
-    type_context: HashMap<String, Vec<String>>,
-    function_context: HashMap<String, (Vec<String>, String)>,
 }
 
 impl EggplantCodeGenerator {
@@ -108,8 +101,6 @@ impl EggplantCodeGenerator {
         Self {
             output: String::new(),
             indent_level: 0,
-            type_context: HashMap::new(),
-            function_context: HashMap::new(),
         }
     }
 
@@ -126,7 +117,7 @@ impl EggplantCodeGenerator {
         // Generate type definitions (outside main)
         for cmd_with_source in commands {
             match &cmd_with_source.command {
-                EggplantCommand::DslType(_) | EggplantCommand::PatternVars(_) => {
+                EggplantCommand::DslType(_) => {
                     self.generate_rust_command_with_source(cmd_with_source);
                 }
                 _ => {}
@@ -142,7 +133,7 @@ impl EggplantCodeGenerator {
                 EggplantCommand::Ruleset(_) => {
                     ruleset_definitions.push(cmd_with_source);
                 }
-                EggplantCommand::DslType(_) | EggplantCommand::PatternVars(_) => {
+                EggplantCommand::DslType(_) => {
                     // Skip type definitions (already generated above)
                 }
                 _ => {
@@ -161,7 +152,7 @@ impl EggplantCodeGenerator {
             self.generate_rust_command_with_source(cmd_with_source);
         }
 
-        // Generate other runtime commands
+        // Generate PatternVars and other runtime commands inside main
         for cmd_with_source in other_commands {
             self.generate_rust_command_with_source(cmd_with_source);
         }
@@ -169,56 +160,6 @@ impl EggplantCodeGenerator {
         self.add_line("info!(\"Eggplant program executed successfully!\");");
         self.dedent();
         self.add_line("}");
-
-        self.output.clone()
-    }
-
-    /// Generate Python code from eggplant commands
-    pub fn generate_python(&mut self, commands: &[EggplantCommand]) -> String {
-        self.output.clear();
-
-        self.add_line("# Generated Eggplant Python Code");
-        self.add_line("");
-        self.add_line("class EggplantEngine:");
-        self.indent();
-        self.add_line("def __init__(self):");
-        self.indent();
-        self.add_line("self.egraph = {}");
-        self.add_line("self.rules = {}");
-        self.add_line("self.functions = {}");
-        self.dedent();
-        self.dedent();
-        self.add_line("");
-
-        for command in commands {
-            self.generate_python_command(command);
-        }
-
-        self.output.clone()
-    }
-
-    /// Generate JavaScript code from eggplant commands
-    pub fn generate_javascript(&mut self, commands: &[EggplantCommand]) -> String {
-        self.output.clear();
-
-        self.add_line("// Generated Eggplant JavaScript Code");
-        self.add_line("");
-        self.add_line("class EggplantEngine {");
-        self.indent();
-        self.add_line("constructor() {");
-        self.indent();
-        self.add_line("this.egraph = {};");
-        self.add_line("this.rules = {};");
-        self.add_line("this.functions = {};");
-        self.dedent();
-        self.add_line("}");
-        self.dedent();
-        self.add_line("}");
-        self.add_line("");
-
-        for command in commands {
-            self.generate_javascript_command(command);
-        }
 
         self.output.clone()
     }
@@ -266,6 +207,7 @@ impl EggplantCodeGenerator {
                 self.add_line("");
             }
             EggplantCommand::PatternVars(pattern_vars) => {
+                // Display original egglog statement if available
                 self.add_line(&format!("// Pattern variables for rule matching"));
                 let var_names: Vec<String> = pattern_vars
                     .variables
@@ -285,6 +227,7 @@ impl EggplantCodeGenerator {
             }
             EggplantCommand::Rule(rule) => {
                 self.add_line(&format!("// Rule: {}", rule.name));
+                self.add_line(&format!("// {}", rule.src_expr));
                 self.add_line(&format!("MyTx::add_rule("));
                 self.indent();
                 self.add_line(&format!("\"{}\",", rule.name));
@@ -325,18 +268,6 @@ impl EggplantCodeGenerator {
                     ruleset, "default_ruleset", config
                 ));
             }
-            EggplantCommand::Rewrite {
-                name,
-                pattern,
-                replacement,
-            } => {
-                self.add_line(&format!("// Rewrite rule: {}", name));
-                self.add_line(&format!(
-                    "// {} => {}",
-                    self.expr_to_string(pattern),
-                    self.expr_to_string(replacement)
-                ));
-            }
             EggplantCommand::Assert { expr, expected } => {
                 self.add_line(&format!(
                     "// Assert: {} == {}",
@@ -347,196 +278,24 @@ impl EggplantCodeGenerator {
             EggplantCommand::Let { var, expr } => {
                 let expr_str = self.expr_to_string(expr);
                 // println!("DEBUG: Let command: {} = {}", var, expr_str);
-                self.add_line(&format!("let {} = {};", var, expr_str));
+                self.add_line(&format!(
+                    "let {}:{}<MyTx> = {};",
+                    var,
+                    match &expr {
+                        GenericExpr::Call(span, head, generic_exprs) => head,
+                        _ => {
+                            panic!("ty unable to infer")
+                        }
+                    },
+                    expr_str
+                ));
+                self.add_line(&format!("{}.commit();", var));
             }
             EggplantCommand::Print { expr } => {
                 self.add_line(&format!(
                     "info!(\"{{:?}}\", {});",
                     self.expr_to_string(expr)
                 ));
-            }
-        }
-    }
-
-    fn generate_python_command(&mut self, command: &EggplantCommand) {
-        match command {
-            EggplantCommand::DslType(dsl_type) => {
-                self.add_line(&format!("# DSL Type definition: {}", dsl_type.name));
-                self.add_line(&format!("self.egraph['{}'] = {{}}", dsl_type.name));
-                for variant in &dsl_type.variants {
-                    self.add_line(&format!(
-                        "self.egraph['{}']['{}'] = lambda *args: ('{}', *args)",
-                        dsl_type.name, variant.name, variant.name
-                    ));
-                }
-                self.add_line("");
-            }
-            EggplantCommand::PatternVars(pattern_vars) => {
-                self.add_line(&format!("# Pattern variables: {}", pattern_vars.name));
-                for var in &pattern_vars.variables {
-                    self.add_line(&format!("#   {}: {}", var.name, var.var_type));
-                }
-                self.add_line("");
-            }
-            EggplantCommand::Rule(rule) => {
-                self.add_line(&format!("# Rule definition: {}", rule.name));
-                self.add_line(&format!("self.rules['{}'] = lambda egraph:", rule.name));
-                self.indent();
-                self.add_line("# Pattern query");
-                self.add_line(&format!(
-                    "#   {}",
-                    rule.pattern_query.replace("\n", "\n#   ")
-                ));
-                self.add_line("# Action");
-                self.add_line(&format!("#   {}", rule.action.replace("\n", "\n#   ")));
-                self.dedent();
-                self.add_line("");
-            }
-            EggplantCommand::Ruleset(name) => {
-                self.add_line(&format!("# Ruleset: {}", name));
-                self.add_line(&format!("self.rulesets['{}'] = []", name));
-            }
-            EggplantCommand::Transaction(name) => {
-                self.add_line(&format!("# Transaction: {}", name));
-            }
-            EggplantCommand::PatternRecorder(name) => {
-                self.add_line(&format!("# Pattern recorder: {}", name));
-            }
-            EggplantCommand::Commit(expr) => {
-                self.add_line(&format!("# Commit: {}", expr));
-            }
-            EggplantCommand::Pull(expr) => {
-                self.add_line(&format!("# Pull: {}", expr));
-            }
-            EggplantCommand::RunRuleset(ruleset, config) => {
-                self.add_line(&format!(
-                    "# Run ruleset: {} with config {}",
-                    ruleset, config
-                ));
-            }
-            EggplantCommand::Rewrite {
-                name,
-                pattern,
-                replacement,
-            } => {
-                self.add_line(&format!("# Rewrite rule: {}", name));
-                self.add_line(&format!(
-                    "self.rules['{}'] = lambda egraph: egraph.rewrite({}, {})",
-                    name,
-                    self.expr_to_string(pattern),
-                    self.expr_to_string(replacement)
-                ));
-                self.add_line("");
-            }
-            EggplantCommand::Assert { expr, expected } => {
-                self.add_line(&format!("# Assertion"));
-                self.add_line(&format!(
-                    "assert {} == {}, 'Assertion failed: {} != {}'",
-                    self.expr_to_string(expr),
-                    self.expr_to_string(expected),
-                    self.expr_to_string(expr),
-                    self.expr_to_string(expected)
-                ));
-                self.add_line("");
-            }
-            EggplantCommand::Let { var, expr } => {
-                self.add_line(&format!("{} = {}", var, self.expr_to_string(expr)));
-            }
-            EggplantCommand::Print { expr } => {
-                self.add_line(&format!("print({})", self.expr_to_string(expr)));
-            }
-        }
-    }
-
-    fn generate_javascript_command(&mut self, command: &EggplantCommand) {
-        match command {
-            EggplantCommand::DslType(dsl_type) => {
-                self.add_line(&format!("// DSL Type definition: {}", dsl_type.name));
-                self.add_line(&format!("this.egraph['{}'] = {{}};", dsl_type.name));
-                for variant in &dsl_type.variants {
-                    self.add_line(&format!(
-                        "this.egraph['{}']['{}'] = (...args) => ['{}', ...args];",
-                        dsl_type.name, variant.name, variant.name
-                    ));
-                }
-                self.add_line("");
-            }
-            EggplantCommand::PatternVars(pattern_vars) => {
-                self.add_line(&format!("// Pattern variables: {}", pattern_vars.name));
-                for var in &pattern_vars.variables {
-                    self.add_line(&format!("//   {}: {}", var.name, var.var_type));
-                }
-                self.add_line("");
-            }
-            EggplantCommand::Rule(rule) => {
-                self.add_line(&format!("// Rule definition: {}", rule.name));
-                self.add_line(&format!("this.rules['{}'] = (egraph) => {{", rule.name));
-                self.indent();
-                self.add_line("// Pattern query");
-                self.add_line(&format!(
-                    "//   {}",
-                    rule.pattern_query.replace("\n", "\n//   ")
-                ));
-                self.add_line("// Action");
-                self.add_line(&format!("//   {}", rule.action.replace("\n", "\n//   ")));
-                self.dedent();
-                self.add_line("};");
-                self.add_line("");
-            }
-            EggplantCommand::Ruleset(name) => {
-                self.add_line(&format!("// Ruleset: {}", name));
-                self.add_line(&format!("this.rulesets['{}'] = [];", name));
-            }
-            EggplantCommand::Transaction(name) => {
-                self.add_line(&format!("// Transaction: {}", name));
-            }
-            EggplantCommand::PatternRecorder(name) => {
-                self.add_line(&format!("// Pattern recorder: {}", name));
-            }
-            EggplantCommand::Commit(expr) => {
-                self.add_line(&format!("// Commit: {}", expr));
-            }
-            EggplantCommand::Pull(expr) => {
-                self.add_line(&format!("// Pull: {}", expr));
-            }
-            EggplantCommand::RunRuleset(ruleset, config) => {
-                self.add_line(&format!(
-                    "// Run ruleset: {} with config {}",
-                    ruleset, config
-                ));
-            }
-            EggplantCommand::Rewrite {
-                name,
-                pattern,
-                replacement,
-            } => {
-                self.add_line(&format!("// Rewrite rule: {}", name));
-                self.add_line(&format!(
-                    "this.rules['{}'] = (egraph) => egraph.rewrite({}, {});",
-                    name,
-                    self.expr_to_string(pattern),
-                    self.expr_to_string(replacement)
-                ));
-                self.add_line("");
-            }
-            EggplantCommand::Assert { expr, expected } => {
-                self.add_line(&format!("// Assertion"));
-                self.add_line(&format!(
-                    "console.assert({} === {}, 'Assertion failed: {} !== {}');",
-                    self.expr_to_string(expr),
-                    self.expr_to_string(expected),
-                    self.expr_to_string(expr),
-                    self.expr_to_string(expected)
-                ));
-                self.add_line("");
-            }
-            EggplantCommand::Let { var, expr } => {
-                let expr_str = self.expr_to_string(expr);
-                // println!("DEBUG: Let command: {} = {}", var, expr_str);
-                self.add_line(&format!("let {} = {};", var, expr_str));
-            }
-            EggplantCommand::Print { expr } => {
-                self.add_line(&format!("console.log({});", self.expr_to_string(expr)));
             }
         }
     }
@@ -595,11 +354,6 @@ impl EggplantCodeGenerator {
     fn is_basic_type(&self, type_name: &str) -> bool {
         let basic_types = ["i64", "f64", "bool", "String", "()"];
         let rst = basic_types.contains(&type_name) || type_name.starts_with('&');
-        if rst {
-            println!("{} is basic type", type_name);
-        } else {
-            println!("{} is complex type", type_name);
-        }
         rst
     }
 
@@ -624,8 +378,18 @@ pub fn convert_to_eggplant_with_source(
     commands: &[Command],
     source_file: Option<String>,
 ) -> Vec<EggplantCommandWithSource> {
+    convert_to_eggplant_with_source_and_program(commands, source_file)
+}
+
+/// Convert egglog commands to eggplant commands with source information and original program
+pub fn convert_to_eggplant_with_source_and_program(
+    commands: &[Command],
+    source_file: Option<String>,
+) -> Vec<EggplantCommandWithSource> {
     let mut eggplant_commands = Vec::new();
     let mut dsl_types: HashMap<String, DslType> = HashMap::new();
+
+    // Extract original statements if program is provided
 
     // Add transaction definition
     eggplant_commands.push(EggplantCommandWithSource {
@@ -713,59 +477,6 @@ pub fn convert_to_eggplant_with_source(
                     source_line: Some(span.line),
                 });
             }
-            // Command::Constructor { name, schema, .. } => {
-            //     // For constructor commands, create DSL type definitions
-            //     let datatype_name = &schema.output;
-
-            //     let dsl_variant = DslVariant {
-            //         name: normalize_identifier(name),
-            //         fields: schema
-            //             .input
-            //             .iter()
-            //             .enumerate()
-            //             .map(|(i, field_type)| DslField {
-            //                 name: format!("arg{}", i),
-            //                 field_type: normalize_identifier(field_type),
-            //             })
-            //             .collect(),
-            //         source_file: source_file.clone(),
-            //         source_line: Some(span.line),
-            //     };
-
-            //     // Debug logging
-            //     println!(
-            //         "DEBUG: Processing Constructor command: {} for datatype: {}",
-            //         name, datatype_name
-            //     );
-
-            //     // Check if we already have a DSL type for this datatype
-            //     let existing_type_index = eggplant_commands.iter().position(|cmd| {
-            //         if let EggplantCommand::DslType(dsl_type) = &cmd.command {
-            //             dsl_type.name == normalize_identifier(datatype_name)
-            //         } else {
-            //             false
-            //         }
-            //     });
-
-            //     if let Some(index) = existing_type_index {
-            //         // Add variant to existing type
-            //         if let EggplantCommand::DslType(dsl_type) =
-            //             &mut eggplant_commands[index].command
-            //         {
-            //             dsl_type.variants.push(dsl_variant);
-            //         }
-            //     } else {
-            //         // Create new DSL type
-            //         eggplant_commands.push(EggplantCommandWithSource {
-            //             command: EggplantCommand::DslType(DslType {
-            //                 name: normalize_identifier(datatype_name),
-            //                 variants: vec![dsl_variant],
-            //             }),
-            //             source_file: source_file.clone(),
-            //             source_line: Some(span.line),
-            //         });
-            //     }
-            // }
             Command::Function {
                 name, schema, span, ..
             } => {
@@ -798,6 +509,7 @@ pub fn convert_to_eggplant_with_source(
                     ),
                     action: format!("// TODO: implement {} action", normalize_identifier(name)),
                     ruleset: "default_ruleset".to_string(),
+                    src_expr: command.clone(),
                 };
 
                 eggplant_commands.push(EggplantCommandWithSource {
@@ -807,6 +519,7 @@ pub fn convert_to_eggplant_with_source(
                 });
             }
             Command::Rule { name, rule, .. } => {
+                println!("panic rule {:?}", rule);
                 // For rules, we need to analyze the pattern to determine what nodes are matched
                 // For now, create a simple pattern with generic nodes
                 let unique_name = if name == "default" {
@@ -854,6 +567,7 @@ pub fn convert_to_eggplant_with_source(
                     pattern_query,
                     action,
                     ruleset: "default_ruleset".to_string(),
+                    src_expr: command.clone(),
                 };
 
                 eggplant_commands.push(EggplantCommandWithSource {
@@ -862,12 +576,17 @@ pub fn convert_to_eggplant_with_source(
                     source_line: Some(rule.span.line),
                 });
             }
-            Command::Rewrite(name, rewrite, _) => {
+            Command::Rewrite(_name, rewrite, _) => {
                 // Analyze the rewrite pattern to extract variables and structure
                 // Always use line counter for unique pattern variable names to avoid conflicts
                 let unique_name = format!("rule_{}", rewrite.span.line);
-                let (pattern_vars, pattern_query, context) =
-                    analyze_rewrite_pattern(&rewrite.lhs, &unique_name, &dsl_types);
+                let (pattern_vars, pattern_query, context, root_node) =
+                    analyze_rewrite_pattern_with_conditions(
+                        &rewrite.lhs,
+                        &unique_name,
+                        &dsl_types,
+                        &rewrite.conditions,
+                    );
 
                 // Create pattern variables
                 eggplant_commands.push(EggplantCommandWithSource {
@@ -882,6 +601,7 @@ pub fn convert_to_eggplant_with_source(
                     &unique_name,
                     &context,
                     &dsl_types,
+                    &root_node,
                 );
 
                 let rule = EggplantRule {
@@ -889,6 +609,7 @@ pub fn convert_to_eggplant_with_source(
                     pattern_query,
                     action,
                     ruleset: "default_ruleset".to_string(),
+                    src_expr: command.clone(),
                 };
 
                 eggplant_commands.push(EggplantCommandWithSource {
@@ -1016,7 +737,17 @@ fn is_basic_type(type_name: &str) -> bool {
 fn infer_type_from_expr(expr: &Expr) -> String {
     match expr {
         Expr::Call(_, func_name, _) => normalize_identifier(func_name),
-        Expr::Var(sp, name) => format!("{:?} {name} UNKNOWN TYPE", sp), // Default type for variables
+        Expr::Var(_, name) => {
+            // For pattern variables starting with ?, try to infer type from context
+            if name.starts_with('?') {
+                // Default to String for pattern variables that might be string types
+                // This is a temporary solution until we have better type inference
+                "String".to_string()
+            } else {
+                // For other variables, default to String
+                "String".to_string()
+            }
+        }
         Expr::Lit(_, lit) => match lit {
             Literal::Int(_) => "i64".to_string(),
             Literal::Float(_) => "f64".to_string(),
@@ -1043,18 +774,19 @@ fn infer_variable_type_from_constructor(
         {
             // Check if we have a field at this argument index
             if arg_index < variant.fields.len() {
-                println!("{} infer to be {}", constructor_name, dsl_type_name);
+                // println!("{} infer to be {}", constructor_name, dsl_type_name);
                 return variant.fields[arg_index].field_type.clone();
             } else {
-                println!("{} infer to be {}", constructor_name, dsl_type_name);
+                // println!("{} infer to be {}", constructor_name, dsl_type_name);
                 // If no field at this index, return the DSL type name
                 return dsl_type_name.clone();
             }
         }
     }
 
-    // Fallback: if constructor not found in DSL types, panic
-    panic!("unable to infer {constructor_name}")
+    // Fallback: if constructor not found in DSL types, use the constructor name as type
+    // println!("WARNING: {} infer to be itself", constructor_name);
+    constructor_name.to_string()
 }
 
 /// Generate better pattern query with type inference and variable context
@@ -1066,6 +798,22 @@ fn generate_pattern_query_with_context(
     PatternVars,
     String,
     HashMap<String, (String, String, usize)>,
+    String, // root node name
+) {
+    generate_pattern_query_with_context_and_conditions(lhs, rule_name, dsl_types, &[])
+}
+
+/// Generate better pattern query with type inference, variable context, and conditions
+fn generate_pattern_query_with_context_and_conditions(
+    lhs: &Expr,
+    rule_name: &str,
+    dsl_types: &HashMap<String, DslType>,
+    conditions: &[Fact],
+) -> (
+    PatternVars,
+    String,
+    HashMap<String, (String, String, usize)>,
+    String, // root node name
 ) {
     let mut variables = Vec::new();
     let mut pattern_query_parts = Vec::new();
@@ -1074,7 +822,7 @@ fn generate_pattern_query_with_context(
     let mut all_nodes = Vec::new();
 
     // Extract variables with better type inference and build the query tree
-    let root_node = extract_variables_with_types_and_context(
+    let (root_node, is_root) = extract_variables_with_types_and_context(
         lhs,
         &mut variables,
         &mut pattern_query_parts,
@@ -1082,51 +830,228 @@ fn generate_pattern_query_with_context(
         dsl_types,
         &mut variable_constructors,
         &mut all_nodes,
+        true, // This is the root expression
     );
 
-    // Create pattern variables struct - include constructor nodes only for basic type access
-    let mut pattern_vars_variables = variables.clone();
+    // Process conditions to extract literal values and operators for basic type conditions
+    let mut condition_info = HashMap::new();
+    let mut condition_expressions = Vec::new();
 
-    // Add constructor nodes to pattern variables only if they have basic type fields
-    for (var_name, (constructor_name, node_name, _)) in &variable_constructors {
+    for condition in conditions {
+        if let Fact::Eq(span, e1, e2) = condition {
+            // Extract operator from span file field (temporary hack)
+            let operator = if let Some(ref file) = span.file {
+                if file.starts_with("operator:") {
+                    file.trim_start_matches("operator:").to_string()
+                } else {
+                    "=".to_string() // Default to "=" if no operator info
+                }
+            } else {
+                "=".to_string() // Default to "=" if no operator info
+            };
+
+            // Handle simple case: (Var, Lit) or (Lit, Var)
+            if let (Expr::Var(_, var_name), Expr::Lit(_, lit)) = (e1, e2) {
+                let normalized_var_name = normalize_identifier(var_name);
+                let literal_value = match lit {
+                    Literal::Int(i) => i.to_string(),
+                    Literal::Float(f) => f.0.to_string(),
+                    Literal::String(s) => format!("\"{}\"", s),
+                    Literal::Bool(b) => b.to_string(),
+                    Literal::Unit => "()".to_string(),
+                };
+
+                condition_info.insert(normalized_var_name, (operator, literal_value));
+            } else if let (Expr::Lit(_, lit), Expr::Var(_, var_name)) = (e1, e2) {
+                let normalized_var_name = normalize_identifier(var_name);
+                let literal_value = match lit {
+                    Literal::Int(i) => i.to_string(),
+                    Literal::Float(f) => f.0.to_string(),
+                    Literal::String(s) => format!("\"{}\"", s),
+                    Literal::Bool(b) => b.to_string(),
+                    Literal::Unit => "()".to_string(),
+                };
+
+                condition_info.insert(normalized_var_name, (operator, literal_value));
+            } else {
+                // Handle complex expressions - store the entire condition for later processing
+                condition_expressions.push((operator, e1.clone(), e2.clone()));
+            }
+        }
+    }
+
+    // Create pattern variables struct - exclude basic types and include only complex types
+    let mut pattern_vars_variables: Vec<PatternVariable> = variables
+        .iter()
+        .filter(|v| !is_basic_type(&v.var_type))
+        .cloned()
+        .collect();
+
+    // Add constructor nodes to pattern variables only if they are complex types
+    for (_var_name, (constructor_name, node_name, _)) in &variable_constructors {
         if !pattern_vars_variables.iter().any(|v| v.name == *node_name) {
-            // Check if this constructor has any basic type fields
-            let has_basic_type_fields = dsl_types
-                .values()
-                .flat_map(|dsl_type| &dsl_type.variants)
-                .find(|variant| variant.name == *constructor_name)
-                .map_or(false, |variant| {
-                    variant
-                        .fields
-                        .iter()
-                        .any(|field| is_basic_type(&field.field_type))
-                });
+            // Only add if this constructor is NOT a basic type
+            let is_complex_type = !is_basic_type(constructor_name);
 
-            if has_basic_type_fields {
-                pattern_vars_variables.push(dbg!(PatternVariable {
+            if is_complex_type {
+                pattern_vars_variables.push(PatternVariable {
                     name: node_name.clone(),
                     var_type: constructor_name.clone(),
-                }));
+                });
             }
         }
     }
 
     // For rewrite rules, add the root node to PatternVars for union operation
-    let mut pattern_vars_variables = dbg!(pattern_vars_variables);
-    if !pattern_vars_variables.iter().any(|v| v.name == root_node) {
+    if is_root && !pattern_vars_variables.iter().any(|v| v.name == root_node) {
         // Infer the type of the root node
         let root_node_type = infer_type_from_expr(lhs);
-        pattern_vars_variables.push(dbg!(PatternVariable {
+        pattern_vars_variables.push(PatternVariable {
             name: root_node.clone(),
             var_type: root_node_type,
-        }));
+        });
     }
 
-    // Generate improved pattern query
+    // Generate improved pattern query with conditions using handle and assert pattern
     let pattern_query = if pattern_query_parts.is_empty() {
         format!("// TODO: implement pattern query for {}", rule_name)
     } else {
+        let mut assert_conditions = Vec::new();
+
+        // Process conditions to generate handle queries and assert conditions
+        // println!(
+        //     "DEBUG: Processing conditions, variable_constructors: {:?}",
+        //     variable_constructors
+        // );
+        println!("DEBUG: Condition info: {:?}", condition_info);
+        let mut condition_vars = Vec::new();
+        for (var_name, (constructor_name, node_name, arg_index)) in &variable_constructors {
+            if let Some((operator, literal_value)) = condition_info.get(var_name) {
+                // println!(
+                //     "DEBUG: Found condition for variable {}: {} {}",
+                //     var_name, operator, literal_value
+                // );
+                // Check if this constructor has basic type fields at this argument position
+                let has_basic_type_field = dsl_types
+                    .values()
+                    .flat_map(|dsl_type| &dsl_type.variants)
+                    .find(|variant| variant.name == *constructor_name)
+                    .map_or(false, |variant| {
+                        if *arg_index < variant.fields.len() {
+                            is_basic_type(&variant.fields[*arg_index].field_type)
+                        } else {
+                            false
+                        }
+                    });
+
+                if has_basic_type_field {
+                    let field_name = get_field_name_for_variable_in_constructor(
+                        constructor_name,
+                        *arg_index,
+                        dsl_types,
+                    );
+
+                    // Generate handle call
+                    let handle_call = if field_name.contains("i64") || field_name.contains("num") {
+                        format!("{}.handle_num()", node_name)
+                    } else {
+                        format!("{}.{}()", node_name, field_name)
+                    };
+
+                    // Generate condition variable name (e.g., "a_b_eq" for variable "a" and "b")
+                    let condition_var_name = format!("{}_{}_cond", var_name, literal_value);
+
+                    // Generate condition expression
+                    let condition_expr = match operator.as_str() {
+                        "=" => format!("{}.eq(&{})", handle_call, literal_value),
+                        "<" => format!("{}.lt(&{})", handle_call, literal_value),
+                        "<=" => format!("{}.le(&{})", handle_call, literal_value),
+                        ">" => format!("{}.gt(&{})", handle_call, literal_value),
+                        ">=" => format!("{}.ge(&{})", handle_call, literal_value),
+                        "!=" => format!("{}.ne(&{})", handle_call, literal_value),
+                        _ => format!("{}.UNKNOWN(&{})", handle_call, literal_value), // default to eq
+                    };
+
+                    // Generate condition variable assignment
+                    let condition_var =
+                        format!("let {} = {{ {} }};", condition_var_name, condition_expr);
+                    condition_vars.push(condition_var);
+                    assert_conditions.push(condition_var_name);
+                }
+            }
+        }
+
+        // Process complex condition expressions
+        for (operator, e1, e2) in &condition_expressions {
+            // println!(
+            //     "DEBUG: Processing complex condition: {} {:?} {:?}",
+            //     operator, e1, e2
+            // );
+
+            // For complex expressions, we need to generate variables for both sides
+            let mut temp_query_parts = Vec::new();
+            let left_var = generate_expression_variable(
+                e1,
+                dsl_types,
+                &mut temp_query_parts,
+                &mut pattern_vars_variables,
+                &mut node_counter,
+                &mut variable_constructors,
+            );
+            let right_var = generate_expression_variable(
+                e2,
+                dsl_types,
+                &mut temp_query_parts,
+                &mut pattern_vars_variables,
+                &mut node_counter,
+                &mut variable_constructors,
+            );
+
+            // println!(
+            //     "DEBUG: Generated variables: left_var={}, right_var={}",
+            //     left_var, right_var
+            // );
+            // println!(
+            //     "DEBUG: temp_query_parts after generation: {:?}",
+            //     temp_query_parts
+            // );
+
+            // Generate condition expression using handle() method
+            let condition_expr = match operator.as_str() {
+                "=" => format!("{}.handle().eq(&{}.handle())", left_var, right_var),
+                "<" => format!("{}.handle().lt(&{}.handle())", left_var, right_var),
+                "<=" => format!("{}.handle().le(&{}.handle())", left_var, right_var),
+                ">" => format!("{}.handle().gt(&{}.handle())", left_var, right_var),
+                ">=" => format!("{}.handle().ge(&{}.handle())", left_var, right_var),
+                "!=" => format!("{}.handle().ne(&{}.handle())", left_var, right_var),
+                _ => format!("{}.handle().eq(&{}.handle())", left_var, right_var), // default to eq
+            };
+
+            // Generate condition variable with node definitions inside the braces
+            let condition_var_name = format!("cond_{}_{}", left_var, right_var);
+            let condition_var = if temp_query_parts.is_empty() {
+                format!("let {} = {{ {} }};", condition_var_name, condition_expr)
+            } else {
+                format!(
+                    "let {} = {{ {} {} }};",
+                    condition_var_name,
+                    temp_query_parts.join(" "),
+                    condition_expr
+                )
+            };
+            condition_vars.push(condition_var);
+            assert_conditions.push(condition_var_name);
+        }
+
+        // Create the final query AFTER all condition processing is complete
         let mut query = pattern_query_parts.join("\n");
+
+        // Add condition variables before the pattern struct creation
+        if !condition_vars.is_empty() {
+            query.push_str("\n");
+            query.push_str(&condition_vars.join("\n"));
+        }
+
         query.push_str(&format!("\n{}Pat::new(", rule_name));
 
         // Add only the variables that are actually in PatternVars to the struct creation
@@ -1135,7 +1060,13 @@ fn generate_pattern_query_with_context(
             .map(|var| var.name.clone())
             .collect();
         query.push_str(&pattern_var_refs.join(", "));
-        query.push(')');
+        query.push_str(")\n");
+
+        // Add assert conditions if any
+        for condition in assert_conditions {
+            query.push_str(format!(".assert({})\n", condition).as_str());
+        }
+
         query
     };
 
@@ -1144,10 +1075,16 @@ fn generate_pattern_query_with_context(
         variables: pattern_vars_variables,
     };
 
-    (pattern_vars, pattern_query, variable_constructors)
+    (
+        pattern_vars,
+        pattern_query,
+        variable_constructors,
+        root_node,
+    )
 }
 
 /// Extract variables with type inference and build query pattern tree with variable context
+/// Returns (node_name, is_root)
 fn extract_variables_with_types_and_context(
     expr: &Expr,
     variables: &mut Vec<PatternVariable>,
@@ -1156,7 +1093,8 @@ fn extract_variables_with_types_and_context(
     dsl_types: &HashMap<String, DslType>,
     variable_constructors: &mut HashMap<String, (String, String, usize)>,
     all_nodes: &mut Vec<String>,
-) -> String {
+    is_root: bool,
+) -> (String, bool) {
     match expr {
         Expr::Var(_, var_name) => {
             // Variable reference - add to pattern variables with inferred type
@@ -1167,24 +1105,24 @@ fn extract_variables_with_types_and_context(
             let normalized_var_name = normalize_identifier(var_name);
             if !is_basic_type(&var_type) && !variables.iter().any(|v| v.name == normalized_var_name)
             {
-                variables.push(dbg!(PatternVariable {
+                variables.push(PatternVariable {
                     name: normalized_var_name.clone(),
                     var_type: var_type.clone(),
-                }));
+                });
                 // For complex types, add query
                 let query_method = if is_leaf_constructor(&var_type, dsl_types) {
                     "query"
                 } else {
                     "query"
                 };
-                pattern_query_parts.push(dbg!(format!(
+                pattern_query_parts.push(format!(
                     "let {} = {}::{}();",
                     normalized_var_name, var_type, query_method
-                )));
+                ));
                 // Add variable node to all nodes
                 all_nodes.push(normalized_var_name.clone());
             }
-            normalized_var_name
+            (normalized_var_name, is_root)
         }
         Expr::Call(_, func_name, args) => {
             // Function call - recursively extract variables from arguments and build the tree
@@ -1201,7 +1139,7 @@ fn extract_variables_with_types_and_context(
 
             for (index, arg) in args.iter().enumerate() {
                 // For constructor calls, infer variable types from context
-                let arg_node = if let Expr::Var(_, var_name) = arg {
+                let (arg_node, _) = if let Expr::Var(_, var_name) = arg {
                     // This variable appears in a constructor call - infer its type
                     let inferred_type =
                         infer_variable_type_from_constructor(func_name, index, dsl_types);
@@ -1218,22 +1156,22 @@ fn extract_variables_with_types_and_context(
                     if !is_basic_type(&inferred_type)
                         && !variables.iter().any(|v| v.name == normalized_var_name)
                     {
-                        variables.push(dbg!(PatternVariable {
+                        variables.push(PatternVariable {
                             name: normalized_var_name.clone(),
                             var_type: inferred_type.clone(),
-                        }));
+                        });
                         // For complex types, add query
                         let query_method = if is_leaf_constructor(&inferred_type, dsl_types) {
-                            format!(r#"query_leaf /* infered as {} */"#, inferred_type)
+                            format!(r#"query_leaf"#)
                         } else {
-                            format!(r#"query_leaf /* infered as {} */"#, inferred_type)
+                            format!(r#"query_leaf"#)
                         };
-                        pattern_query_parts.push(dbg!(format!(
+                        pattern_query_parts.push(format!(
                             "let {} = {}::{}();",
                             normalized_var_name, inferred_type, query_method
-                        )));
+                        ));
                     }
-                    normalized_var_name
+                    (normalized_var_name, false)
                 } else {
                     // For non-variable arguments, use the normal recursive extraction
                     extract_variables_with_types_and_context(
@@ -1244,6 +1182,7 @@ fn extract_variables_with_types_and_context(
                         dsl_types,
                         variable_constructors,
                         all_nodes,
+                        false,
                     )
                 };
 
@@ -1251,15 +1190,28 @@ fn extract_variables_with_types_and_context(
                 let arg_type = infer_variable_type_from_constructor(func_name, index, dsl_types);
                 if is_basic_type(&arg_type) {
                     // For basic types, create StrippedCondition instead of query parameter
+                    // But for string variables, don't create constraints in query - they can be accessed in action
                     if let Expr::Var(_, var_name) = arg {
-                        // Basic type variables are accessed through their constructor variant fields
-                        // We need to find the field name for this variable in the constructor
-                        let field_name =
-                            get_field_name_for_variable_in_constructor(func_name, index, dsl_types);
-                        basic_conditions.push(format!(
-                            "pat.{}.{} == {}",
-                            constructor_node_name, field_name, arg_node
-                        ));
+                        if arg_type == "String" {
+                            // String variables don't need constraints in query - they can be accessed via pat.xxx.field_name
+                            // Just add them to pattern variables if not already present
+                            let normalized_var_name = normalize_identifier(var_name);
+                            if !variables.iter().any(|v| v.name == normalized_var_name) {
+                                variables.push(PatternVariable {
+                                    name: normalized_var_name.clone(),
+                                    var_type: "String".to_string(),
+                                });
+                            }
+                        } else {
+                            // For other basic types (i64, f64, bool), create constraints
+                            let field_name = get_field_name_for_variable_in_constructor(
+                                func_name, index, dsl_types,
+                            );
+                            basic_conditions.push(format!(
+                                "pat.{}.{} == {}",
+                                constructor_node_name, field_name, arg_node
+                            ));
+                        }
                     } else {
                         // For literals, just use the value directly
                         basic_conditions
@@ -1268,7 +1220,7 @@ fn extract_variables_with_types_and_context(
                 } else {
                     // For complex types, add to argument nodes only if this is not a leaf constructor
                     if !is_leaf_constructor(func_name, dsl_types) {
-                        println!("push {}:{}", arg_node, arg_type);
+                        // println!("push {}:{}", arg_node, arg_type);
                         complex_arg_nodes.push(arg_node);
                     }
                 }
@@ -1324,6 +1276,28 @@ fn extract_variables_with_types_and_context(
                 })
                 .collect();
 
+            // Build condition queries for basic type arguments
+            let mut condition_queries = Vec::new();
+            for condition in &basic_conditions {
+                // Parse condition like "pat.m_num_node2.arg_i64_00 == a"
+                // Convert to query condition like ".arg_i64_00(&10000)"
+                if condition.contains(" == ") {
+                    let parts: Vec<&str> = condition.split(" == ").collect();
+                    if parts.len() == 2 {
+                        let field_access = parts[0].trim();
+                        let value = parts[1].trim();
+
+                        // Extract field name from field access (e.g., "pat.m_num_node2.arg_i64_00" -> "arg_i64_00")
+                        if let Some(field_name) = field_access.split('.').last() {
+                            // For conditions, we need to use the literal value from the condition
+                            // The value should be the literal (e.g., 10000) not the variable name
+                            // Since we're processing conditions, the value should already be the literal
+                            condition_queries.push(format!(".{}(&{})", field_name, value));
+                        }
+                    }
+                }
+            }
+
             // Add the query for this function call (the hyperedge) - only complex args
             // Use query_leaf() for leaf nodes (no arguments), query() for internal nodes
             if is_leaf_constructor(func_name, dsl_types) {
@@ -1333,41 +1307,45 @@ fn extract_variables_with_types_and_context(
                     .iter()
                     .any(|part| part.contains(&node_name))
                 {
-                    pattern_query_parts.push(dbg!(format!(
+                    // For leaf nodes, always generate simple query without condition queries
+                    // Conditions are handled in the assert phase using handle patterns
+                    let full_query = format!(
                         "let {} = {}::query();",
                         node_name,
                         normalize_identifier(func_name)
-                    )));
+                    );
+                    pattern_query_parts.push(full_query);
                 }
             } else {
                 // Internal nodes use query() with arguments
-                pattern_query_parts.push(dbg!(format!(
-                    "let {} = {}::query({});",
+                let base_query = format!(
+                    "let {} = {}::query({})",
                     node_name,
                     normalize_identifier(func_name),
                     arg_refs.join(", ")
-                )));
+                );
+                let full_query = if !condition_queries.is_empty() {
+                    format!("{}{};", base_query, condition_queries.join(""))
+                } else {
+                    format!("{};", base_query)
+                };
+                pattern_query_parts.push(full_query);
             }
 
-            // Add StrippedCondition checks for basic types
-            if !basic_conditions.is_empty() {
-                pattern_query_parts.push(dbg!(format!(
-                    "// StrippedCondition checks: {}",
-                    basic_conditions.join(" && ")
-                )));
-            }
-
-            node_name
+            (node_name, is_root)
         }
         Expr::Lit(_, lit) => {
             // Literal - no variables to extract, return literal value
-            match lit {
-                Literal::Int(i) => i.to_string(),
-                Literal::Float(f) => f.0.to_string(),
-                Literal::String(s) => format!("\"{}\"", s),
-                Literal::Bool(b) => b.to_string(),
-                Literal::Unit => "()".to_string(),
-            }
+            (
+                match lit {
+                    Literal::Int(i) => i.to_string(),
+                    Literal::Float(f) => f.0.to_string(),
+                    Literal::String(s) => format!("\"{}\"", s),
+                    Literal::Bool(b) => b.to_string(),
+                    Literal::Unit => "()".to_string(),
+                },
+                is_root,
+            )
         }
     }
 }
@@ -1387,19 +1365,20 @@ struct VariableContext {
     variable_constructors: HashMap<String, (String, String, usize)>, // var_name -> (constructor_name, node_name, arg_index)
 }
 
-/// Analyze a rewrite pattern to extract pattern variables and generate pattern query
-fn analyze_rewrite_pattern(
+/// Analyze a rewrite pattern with conditions to extract pattern variables and generate pattern query
+fn analyze_rewrite_pattern_with_conditions(
     lhs: &Expr,
     rule_name: &str,
     dsl_types: &HashMap<String, DslType>,
-) -> (PatternVars, String, VariableContext) {
-    let (pattern_vars, pattern_query, variable_constructors) =
-        generate_pattern_query_with_context(lhs, rule_name, dsl_types);
+    conditions: &[Fact],
+) -> (PatternVars, String, VariableContext, String) {
+    let (pattern_vars, pattern_query, variable_constructors, root_node) =
+        generate_pattern_query_with_context_and_conditions(lhs, rule_name, dsl_types, conditions);
     let context = VariableContext {
         variables: pattern_vars.variables.clone(),
         variable_constructors,
     };
-    (pattern_vars, pattern_query, context)
+    (pattern_vars, pattern_query, context, root_node)
 }
 
 /// Generate rewrite action from the right-hand side pattern with variable context
@@ -1408,29 +1387,9 @@ fn generate_rewrite_action_with_context(
     rule_name: &str,
     context: &VariableContext,
     dsl_types: &HashMap<String, DslType>,
+    root_node_name: &str,
 ) -> String {
     let result_expr = generate_insert_expr(rhs, context, dsl_types);
-
-    // Find the root node in PatternVars - this should be the node that matches the LHS pattern structure
-    // For rewrite rules, we need to find the node that represents the entire pattern being rewritten
-    // Look for constructor nodes that are not basic type variables
-    let root_node_name = context
-        .variables
-        .iter()
-        .filter(|v| !is_basic_type(&v.var_type))
-        .find(|v| v.name.ends_with("_node") || v.name.contains("node"))
-        .map(|v| v.name.clone())
-        .unwrap_or_else(|| {
-            // Fallback: use the first non-basic type variable
-            context
-                .variables
-                .iter()
-                .find(|v| !is_basic_type(&v.var_type))
-                .map(|v| v.name.clone())
-                .unwrap_or_else(|| {
-                    format!("{}_node1", normalize_identifier(&rule_name.to_snake_case()))
-                })
-        });
 
     format!(
         "let result = {};\nctx.union(pat.{}, result);",
@@ -1499,8 +1458,6 @@ fn generate_insert_expr(
                     .iter()
                     .find(|v| v.name == normalized_var_name)
                 {
-                    // let insert_function = format!("insert_{}", var_info.var_type.to_snake_case());
-                    // format!("ctx.{}(pat.{})", insert_function, normalized_var_name)
                     format!("pat.{}", normalized_var_name)
                 } else {
                     // Fallback for complex type variables
@@ -1544,18 +1501,24 @@ fn generate_insert_expr(
                     .map(|arg| generate_insert_expr(arg, context, dsl_types))
                     .collect();
 
-                // Generate the correct insert function name based on variant
-                let insert_function = format!("insert_{}", func_name.to_snake_case());
-
-                // For complex types, we need to ensure the arguments are in the correct order
-                // based on the variant's field declarations
-                if let Some(variant) = variant_info {
-                    // The arguments should already be in the correct order from the AST
-                    // We just need to make sure we're using the right insert function
-                    format!("ctx.{}({})", insert_function, arg_exprs.join(", "))
-                } else {
-                    // Fallback for unknown variants
-                    format!("ctx.{}({})", insert_function, arg_exprs.join(", "))
+                // Generate the correct insert function name based on variant or primitve matching
+                match func_name.as_str() {
+                    "max" => {
+                        let max_prim_fn = format!("std::cmp::max");
+                        format!("{}({})", max_prim_fn, arg_exprs.join(", "))
+                    }
+                    "min" => {
+                        let min_prim_fn = format!("std::cmp::min");
+                        format!("{}({})", min_prim_fn, arg_exprs.join(", "))
+                    }
+                    "&" => {
+                        let bitand_prim_fn = format!("std::ops::BitAnd::bitand");
+                        format!("{}({})", bitand_prim_fn, arg_exprs.join(", "))
+                    }
+                    _ => {
+                        let insert_fn = format!("insert_{}", func_name.to_snake_case());
+                        format!("ctx.{}({})", insert_fn, arg_exprs.join(", "))
+                    }
                 }
             }
         }
@@ -1667,70 +1630,8 @@ mod tests {
     #[test]
     fn test_rust_generation() {
         let commands = vec![
-            EggplantCommandWithSource {
-                command: EggplantCommand::DslType(DslType {
-                    name: "Math".to_string(),
-                    variants: vec![
-                        DslVariant {
-                            name: "Num".to_string(),
-                            fields: vec![DslField {
-                                name: "num".to_string(),
-                                field_type: "i64".to_string(),
-                            }],
-                            source_file: Some("test.egg".to_string()),
-                            source_line: Some(1),
-                        },
-                        DslVariant {
-                            name: "Add".to_string(),
-                            fields: vec![
-                                DslField {
-                                    name: "l".to_string(),
-                                    field_type: "Math".to_string(),
-                                },
-                                DslField {
-                                    name: "r".to_string(),
-                                    field_type: "Math".to_string(),
-                                },
-                            ],
-                            source_file: Some("test.egg".to_string()),
-                            source_line: Some(2),
-                        },
-                    ],
-                }),
-                source_file: Some("test.egg".to_string()),
-                source_line: Some(1),
-            },
-            EggplantCommandWithSource {
-                command: EggplantCommand::PatternVars(PatternVars {
-                    name: "AddPat".to_string(),
-                    variables: vec![
-                        PatternVariable {
-                            name: "l".to_string(),
-                            var_type: "Num".to_string(),
-                        },
-                        PatternVariable {
-                            name: "r".to_string(),
-                            var_type: "Num".to_string(),
-                        },
-                        PatternVariable {
-                            name: "p".to_string(),
-                            var_type: "Add".to_string(),
-                        },
-                    ],
-                }),
-                source_file: Some("test.egg".to_string()),
-                source_line: Some(2),
-            },
-            EggplantCommandWithSource {
-                command: EggplantCommand::Rule(EggplantRule {
-                    name: "add_rule".to_string(),
-                    pattern_query: "let l = Num::query();\nlet r = Num::query();\nlet p = Add::query(&l, &r);\nAddPat::new(l, r, p)".to_string(),
-                    action: "let cal = ctx.devalue(l.num) + ctx.devalue(r.num);\nlet add_value = ctx.insert_num(cal);\nctx.union(p, add_value);".to_string(),
-                    ruleset: "default_ruleset".to_string(),
-                }),
-                source_file: Some("test.egg".to_string()),
-                source_line: Some(3),
-            },
+            EggplantCommandWithSource {command:EggplantCommand::PatternVars(PatternVars{name:"AddPat".to_string(),variables:vec![PatternVariable{name:"l".to_string(),var_type:"Num".to_string(),},PatternVariable{name:"r".to_string(),var_type:"Num".to_string(),},PatternVariable{name:"p".to_string(),var_type:"Add".to_string(),},],}),source_file:Some("test.egg".to_string()),source_line:Some(2)  },
+            EggplantCommandWithSource {command:EggplantCommand::Rule(EggplantRule{name:"add_rule".to_string(),pattern_query:"let l = Num::query();\nlet r = Num::query();\nlet p = Add::query(&l, &r);\nAddPat::new(l, r, p)".to_string(),action:"let cal = ctx.devalue(l.num) + ctx.devalue(r.num);\nlet add_value = ctx.insert_num(cal);\nctx.union(p, add_value);".to_string(),ruleset:"default_ruleset".to_string(), src_expr: todo!() }),source_file:Some("test.egg".to_string()),source_line:Some(3)  },
         ];
 
         let mut codegen = EggplantCodeGenerator::new();
@@ -1742,86 +1643,144 @@ mod tests {
         assert!(rust_code.contains("struct AddPat"));
         assert!(rust_code.contains("add_rule"));
     }
+}
 
-    #[test]
-    fn test_python_generation() {
-        let commands = vec![
-            EggplantCommand::DslType(DslType {
-                name: "Math".to_string(),
-                variants: vec![DslVariant {
-                    name: "Num".to_string(),
-                    fields: vec![DslField {
-                        name: "num".to_string(),
-                        field_type: "i64".to_string(),
-                    }],
-                    source_file: Some("test.egg".to_string()),
-                    source_line: Some(1),
-                }],
-            }),
-            EggplantCommand::Assert {
-                expr: Expr::Call(
-                    Span::new(None, 1, 1),
-                    "add".to_string(),
-                    vec![
-                        Expr::Call(
-                            Span::new(None, 1, 1),
-                            "Num".to_string(),
-                            vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(1))],
-                        ),
-                        Expr::Call(
-                            Span::new(None, 1, 1),
-                            "Num".to_string(),
-                            vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(2))],
-                        ),
-                    ],
-                ),
-                expected: Expr::Call(
-                    Span::new(None, 1, 1),
-                    "Num".to_string(),
-                    vec![Expr::Lit(Span::new(None, 1, 1), Literal::Int(3))],
-                ),
-            },
-        ];
+/// Generate a variable for an expression in condition context
+fn generate_expression_variable(
+    expr: &Expr,
+    dsl_types: &HashMap<String, DslType>,
+    pattern_query_parts: &mut Vec<String>,
+    pattern_vars_variables: &mut Vec<PatternVariable>,
+    node_counter: &mut usize,
+    variable_constructors: &mut HashMap<String, (String, String, usize)>,
+) -> String {
+    match expr {
+        Expr::Var(_, var_name) => {
+            // For variables, use the existing variable name
+            normalize_identifier(var_name)
+        }
+        Expr::Lit(_, lit) => {
+            // For literals, generate a unique variable name
+            let var_name = match lit {
+                Literal::Int(i) => format!("lit_{}", i),
+                Literal::Float(f) => format!("lit_{}", f.0),
+                Literal::String(s) => format!("lit_{}", s.replace('\"', "")),
+                Literal::Bool(b) => format!("lit_{}", b),
+                Literal::Unit => "lit_unit".to_string(),
+            };
 
-        let mut codegen = EggplantCodeGenerator::new();
-        let python_code = codegen.generate_python(&commands);
+            // Add the literal variable to pattern variables if not already present
+            if !pattern_vars_variables.iter().any(|v| v.name == var_name) {
+                pattern_vars_variables.push(PatternVariable {
+                    name: var_name.clone(),
+                    var_type: infer_type_from_literal(lit),
+                });
+            }
 
-        assert!(python_code.contains("class EggplantEngine"));
-        assert!(python_code.contains("Math"));
-        assert!(python_code.contains("assert"));
+            var_name
+        }
+        Expr::Call(_, func_name, args) => {
+            // For constructor calls, generate a variable and query
+            let node_name = format!("node_{}", node_counter);
+            *node_counter += 1;
+
+            // Extract variables or literal values for arguments
+            let arg_values: Vec<String> = args
+                .iter()
+                .map(|arg| match arg {
+                    Expr::Lit(_, lit) => {
+                        // For literals, use the literal value directly
+                        match lit {
+                            Literal::Int(i) => i.to_string(),
+                            Literal::Float(f) => f.0.to_string(),
+                            Literal::String(s) => format!("\"{}\"", s),
+                            Literal::Bool(b) => b.to_string(),
+                            Literal::Unit => "()".to_string(),
+                        }
+                    }
+                    _ => {
+                        // For other expressions, generate variables
+                        generate_expression_variable(
+                            arg,
+                            dsl_types,
+                            pattern_query_parts,
+                            pattern_vars_variables,
+                            node_counter,
+                            variable_constructors,
+                        )
+                    }
+                })
+                .collect();
+
+            // Generate query for this constructor
+            let query = if arg_values.is_empty() {
+                format!("let {} = {}::query_leaf();", node_name, func_name)
+            } else {
+                // For constructor calls with literal arguments, use method chaining
+                // e.g., MNum::query().num(&1) instead of MNum::query(&1)
+                let constructor_name = func_name.to_string();
+                let mut query_parts =
+                    vec![format!("let {} = {}::query()", node_name, constructor_name)];
+
+                // Get the constructor variant to determine field names
+                if let Some(dsl_type) = dsl_types.get(&constructor_name) {
+                    for (i, arg_value) in arg_values.iter().enumerate() {
+                        if let Some(variant) = dsl_type
+                            .variants
+                            .iter()
+                            .find(|v| v.name == constructor_name)
+                        {
+                            if i < variant.fields.len() {
+                                let field_name =
+                                    format!("arg_{}_{:02}", variant.fields[i].field_type, i);
+                                query_parts.push(format!(".{}(&{})", field_name, arg_value));
+                            } else {
+                                // Fallback if we don't have enough type info
+                                query_parts.push(format!(".arg_{:02}(&{})", i, arg_value));
+                            }
+                        } else {
+                            // Fallback if variant not found
+                            query_parts.push(format!(".arg_{:02}(&{})", i, arg_value));
+                        }
+                    }
+                } else {
+                    // Fallback if type not found
+                    for (i, arg_value) in arg_values.iter().enumerate() {
+                        query_parts.push(format!(".arg_{:02}(&{})", i, arg_value));
+                    }
+                }
+
+                query_parts.push(";".to_string());
+                query_parts.join("")
+            };
+
+            pattern_query_parts.push(query);
+
+            // Infer the correct return type for this constructor
+            let return_type = infer_variable_type_from_constructor(func_name, 0, dsl_types);
+
+            // Add to pattern variables only if it's a complex type
+            if !is_basic_type(&return_type)
+                && !pattern_vars_variables.iter().any(|v| v.name == node_name)
+            {
+                pattern_vars_variables.push(PatternVariable {
+                    name: node_name.clone(),
+                    var_type: return_type,
+                });
+            }
+
+            node_name
+        }
     }
+}
 
-    #[test]
-    fn test_javascript_generation() {
-        let commands = vec![
-            EggplantCommand::DslType(DslType {
-                name: "Bool".to_string(),
-                variants: vec![
-                    DslVariant {
-                        name: "True".to_string(),
-                        fields: vec![],
-                        source_file: Some("test.egg".to_string()),
-                        source_line: Some(1),
-                    },
-                    DslVariant {
-                        name: "False".to_string(),
-                        fields: vec![],
-                        source_file: Some("test.egg".to_string()),
-                        source_line: Some(1),
-                    },
-                ],
-            }),
-            EggplantCommand::Let {
-                var: "x".to_string(),
-                expr: Expr::Call(Span::new(None, 1, 1), "True".to_string(), vec![]),
-            },
-        ];
-
-        let mut codegen = EggplantCodeGenerator::new();
-        let js_code = codegen.generate_javascript(&commands);
-
-        assert!(js_code.contains("class EggplantEngine"));
-        assert!(js_code.contains("Bool"));
-        assert!(js_code.contains("let x ="));
+/// Infer type from literal
+fn infer_type_from_literal(lit: &Literal) -> String {
+    match lit {
+        Literal::Int(_) => "i64".to_string(),
+        Literal::Float(_) => "f64".to_string(),
+        Literal::String(_) => "String".to_string(),
+        Literal::Bool(_) => "bool".to_string(),
+        Literal::Unit => "()".to_string(),
     }
 }

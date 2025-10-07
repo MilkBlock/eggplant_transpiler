@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 
 pub struct Parser {
@@ -20,7 +20,7 @@ impl Default for Parser {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, Hash)]
 pub enum Token {
     LParen(Span),
     RParen(Span),
@@ -28,6 +28,30 @@ pub enum Token {
     String(String, Span),
     Number(String, Span),
     Keyword(String, Span),
+}
+impl Display for Token {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Token::LParen(_) => write!(f, "("),
+            Token::RParen(_) => write!(f, ")"),
+            Token::Symbol(sym, _) => write!(f, "{}", sym),
+            Token::String(s, _) => write!(f, "{}", s),
+            Token::Number(num, _) => write!(f, "{}", num),
+            Token::Keyword(key, _) => write!(f, ":{}", key),
+        }
+    }
+}
+impl Token {
+    fn sp(&self) -> Span {
+        match self {
+            Token::LParen(span) => span.clone(),
+            Token::RParen(span) => span.clone(),
+            Token::Symbol(_, span) => span.clone(),
+            Token::String(_, span) => span.clone(),
+            Token::Number(_, span) => span.clone(),
+            Token::Keyword(_, span) => span.clone(),
+        }
+    }
 }
 impl PartialEq for Token {
     fn eq(&self, other: &Self) -> bool {
@@ -59,6 +83,7 @@ impl Parser {
     }
 
     fn tokenize(&mut self, input: &str) -> Result<(), ParseError> {
+        // println!("DEBUG: Starting tokenization of input: {}", input);
         self.tokens.clear();
         let mut chars = input.chars().peekable();
 
@@ -103,7 +128,6 @@ impl Parser {
                 }
                 ch if ch.is_whitespace() => {
                     if ch == '\n' {
-                        println!("line plus 1");
                         self.current_line += 1;
                         self.current_col = 1;
                     } else {
@@ -122,13 +146,20 @@ impl Parser {
                         self.current_col += 1;
                     }
 
-                    if symbol
-                        .chars()
-                        .all(|c| c.is_ascii_digit() || c == '-' && symbol.len() == 1)
-                    {
+                    if symbol.chars().all(|c| {
+                        c.is_ascii_digit()
+                            || (c == '-'
+                                && symbol.len() > 1
+                                && symbol.chars().skip(1).all(|c| c.is_ascii_digit()))
+                    }) {
                         self.tokens
                             .push_back(Token::Number(symbol, self.current_span()));
                     } else if symbol.starts_with(':') {
+                        // println!(
+                        //     "DEBUG: Found keyword token: '{}' at line {}",
+                        //     symbol,
+                        //     self.current_span().line
+                        // );
                         self.tokens.push_back(Token::Keyword(
                             symbol[1..].to_string(),
                             self.current_span(),
@@ -146,19 +177,42 @@ impl Parser {
     fn parse_program(&mut self) -> Result<Vec<Command>, ParseError> {
         let mut commands = Vec::new();
         while !self.tokens.is_empty() {
-            if let Ok(command) = self.parse_command() {
-                commands.push(command);
-            } else {
-                // Print debug info when parsing fails
-                log::debug!(
-                    "Failed to parse command, parsed {} commands so far, remaining tokens: {:?}",
-                    commands.len(),
-                    self.tokens
-                );
-                // Don't break, try to continue parsing
-                // Skip the problematic token and continue
-                if !self.tokens.is_empty() {
-                    log::debug!("Skipping token: {:?}", self.tokens.pop_front());
+            match self.parse_command() {
+                Ok(command) => {
+                    commands.push(command);
+                }
+                Err(err) => {
+                    // Print detailed error info when parsing fails
+                    let span = err.0;
+                    eprintln!("Parse error at line {}:{} - {}", span.line, span.col, err.1);
+
+                    // Show context around the error
+                    if let Some(token) = self.tokens.front() {
+                        let token_span = get_span(token);
+                        eprintln!(
+                            "  Current token: {:?} at line {}:{}",
+                            token, token_span.line, token_span.col
+                        );
+                    }
+
+                    eprintln!(
+                        "  Context: Parsed {} commands so far, continuing...",
+                        commands.len()
+                    );
+
+                    // Print debug info when parsing fails
+                    log::debug!(
+                        "Failed to parse command, parsed {} commands so far, remaining tokens: {:?}",
+                        commands.len(),
+                        self.tokens
+                    );
+                    // Don't break, try to continue parsing
+                    // Skip the problematic token and continue
+                    if !self.tokens.is_empty() {
+                        let skipped_token = self.tokens.pop_front();
+                        eprintln!("  Skipping token and continuing...");
+                        log::debug!("Skipping token: {:?}", skipped_token);
+                    }
                 }
             }
         }
@@ -202,7 +256,6 @@ impl Parser {
             variants.push(variant);
         }
 
-        println!("current span {:?}", sp);
         Ok(Command::Datatype {
             span: sp,
             name,
@@ -261,15 +314,21 @@ impl Parser {
         let schema = self.parse_schema()?;
 
         // Skip keyword arguments (like :cost)
+        let mut keyword2symbol = HashMap::new();
         while matches!(self.peek_token(), Some(Token::Keyword(_, _))) {
-            self.tokens.pop_front(); // Skip keyword
-            self.parse_symbol()?; // Skip value
+            let _ = self.tokens.pop_front().iter().map(|k| {
+                keyword2symbol.insert(format!("{}", k), self.parse_symbol().unwrap()); // Skip value
+            });
         }
 
         Ok(Command::Constructor {
             span: sp,
             name,
             schema,
+            cost: keyword2symbol
+                .get(&":cost".to_string())
+                .cloned()
+                .map(|(s, _)| s.parse().unwrap()),
         })
     }
 
@@ -324,28 +383,45 @@ impl Parser {
         let lhs = self.parse_expr()?;
         let rhs = self.parse_expr()?;
         let mut ruleset = "default".to_string();
+        let mut conditions = Vec::new();
+
+        // println!(
+        //     "DEBUG: Starting rewrite parsing, next tokens: {:?}",
+        //     self.peek_token()
+        // );
+        // println!("DEBUG: Remaining tokens after RHS: {:?}", self.tokens);
 
         // Parse optional keyword arguments
         while matches!(self.peek_token(), Some(Token::Keyword(_, _))) {
             let (keyword, sp) = self.parse_symbol()?;
+            println!("DEBUG: Found keyword: '{}' at line {}", keyword, sp.line);
             match keyword.as_str() {
                 "ruleset" => {
                     (ruleset, _) = self.parse_symbol()?;
                 }
                 "when" => {
-                    // Skip when conditions for now
+                    // Parse when conditions
+                    // println!("DEBUG: Processing :when conditions");
                     self.expect_token(Token::LParen(span()))?;
                     while self.peek_token() != Some(&Token::RParen(span())) {
-                        self.tokens.pop_front();
+                        let condition = self.parse_fact()?;
+                        // println!("DEBUG: Added condition: {:?}", condition);
+                        conditions.push(condition);
                     }
                     self.expect_token(Token::RParen(span()))?;
                 }
                 _ => {
                     // Skip unknown keywords
+                    println!("DEBUG: Skipping unknown keyword: '{}'", keyword);
                     self.tokens.pop_front();
                 }
             }
         }
+
+        // println!(
+        //     "DEBUG: Rewrite parsing complete, conditions: {:?}",
+        //     conditions
+        // );
 
         Ok(Command::Rewrite(
             ruleset,
@@ -353,7 +429,7 @@ impl Parser {
                 span: lhs.span(),
                 lhs,
                 rhs,
-                conditions: Vec::new(),
+                conditions,
             },
             false,
         ))
@@ -370,11 +446,18 @@ impl Parser {
             self.expect_token(Token::LParen(span()))?;
             let (op, sp) = self.parse_symbol()?;
 
-            if op == "=" {
+            // Support comparison operators: =, <, <=, >, >=, !=
+            if op == "=" || op == "<" || op == "<=" || op == ">" || op == ">=" || op == "!=" {
                 let e1 = self.parse_expr()?;
                 let e2 = self.parse_expr()?;
                 self.expect_token(Token::RParen(span()))?;
-                Ok(Fact::Eq(sp, e1, e2))
+                // Store operator in the span's file field as a temporary solution
+                let operator_span = Span {
+                    file: Some(format!("operator:{}", op)), // Temporary hack to store operator
+                    line: sp.line,
+                    col: sp.col,
+                };
+                Ok(Fact::Eq(operator_span, e1, e2))
             } else {
                 let expr = self.parse_expr()?;
                 self.expect_token(Token::RParen(span()))?;
@@ -453,7 +536,10 @@ impl Parser {
                 let (sym, sp) = self.parse_symbol()?;
                 Ok(Expr::Var(sp, sym))
             }
-            _ => Err(ParseError::new(span(), "Expected expression".to_string())),
+            _ => Err(ParseError::new(
+                self.peek_token().unwrap().sp(),
+                "Expected expression".to_string(),
+            )),
         }
     }
 
@@ -463,7 +549,10 @@ impl Parser {
                 .map_err(|_| ParseError::new(sp.clone(), "Invalid number".to_string()))
                 .map(|n| (n, sp))
         } else {
-            Err(ParseError::new(span(), "Expected number".to_string()))
+            Err(ParseError::new(
+                self.tokens.front().unwrap().sp(),
+                "Expected number".to_string(),
+            ))
         }
     }
 
@@ -471,7 +560,10 @@ impl Parser {
         if let Some(Token::String(s, sp)) = self.tokens.pop_front() {
             Ok((s, sp))
         } else {
-            Err(ParseError::new(span(), "Expected string".to_string()))
+            Err(ParseError::new(
+                self.tokens.front().unwrap().sp(),
+                "Expected string".to_string(),
+            ))
         }
     }
 
@@ -493,13 +585,13 @@ impl Parser {
                 Ok(())
             } else {
                 Err(ParseError::new(
-                    self.current_span(),
+                    self.peek_token().map(|t| t.sp()).unwrap_or_default(),
                     format!("Expected {:?}, got {:?}", expected, token),
                 ))
             }
         } else {
             Err(ParseError::new(
-                self.current_span(),
+                self.peek_token().map(|t| t.sp()).unwrap_or_default(),
                 format!("Expected {:?}, but no more tokens", expected),
             ))
         }

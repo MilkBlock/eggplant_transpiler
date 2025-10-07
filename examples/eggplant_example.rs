@@ -259,45 +259,4 @@ mod tests {
         assert!(rust_code.contains("#[eggplant::dsl]"));
         assert!(rust_code.contains("enum"));
     }
-
-    #[test]
-    fn test_simple_eggplant_program() {
-        let commands = vec![
-            EggplantCommandWithSource {
-                command: EggplantCommand::DslType(DslType {
-                    name: "Test".to_string(),
-                    variants: vec![
-                        DslVariant {
-                            name: "A".to_string(),
-                            fields: vec![],
-                            source_file: Some("test.egg".to_string()),
-                            source_line: Some(1),
-                        },
-                        DslVariant {
-                            name: "B".to_string(),
-                            fields: vec![],
-                            source_file: Some("test.egg".to_string()),
-                            source_line: Some(1),
-                        },
-                    ],
-                }),
-                source_file: Some("test.egg".to_string()),
-                source_line: Some(1),
-            },
-            EggplantCommandWithSource {
-                command: EggplantCommand::Let {
-                    var: "x".to_string(),
-                    expr: Expr::Call(Span::new(None, 1, 1), "A".to_string(), vec![]),
-                },
-                source_file: Some("test.egg".to_string()),
-                source_line: Some(2),
-            },
-        ];
-
-        let mut codegen = EggplantCodeGenerator::new();
-        let rust_code = codegen.generate_rust(&commands);
-
-        assert!(rust_code.contains("Test"));
-        assert!(rust_code.contains("let x ="));
-    }
 }

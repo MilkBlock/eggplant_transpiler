@@ -1,4 +1,5 @@
 /target
 /generated
 test_crate/target
+*.egg
 test_crate/src/main.rs
