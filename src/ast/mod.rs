@@ -78,14 +78,26 @@ impl<Head: Display, Leaf: Display> Display for GenericExpr<Head, Leaf> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GenericFact<Head, Leaf> {
-    Eq(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
+    Op(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     Fact(GenericExpr<Head, Leaf>),
 }
 
 impl<Head: Display, Leaf: Display> Display for GenericFact<Head, Leaf> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            GenericFact::Eq(_, e1, e2) => write!(f, "(= {} {})", e1, e2),
+            GenericFact::Op(span, e1, e2) => {
+                // Extract operator from span file field if available
+                let operator = if let Some(ref file) = span.file {
+                    if file.starts_with("operator:") {
+                        file.trim_start_matches("operator:")
+                    } else {
+                        "="
+                    }
+                } else {
+                    "="
+                };
+                write!(f, "({} {} {})", operator, e1, e2)
+            }
             GenericFact::Fact(expr) => write!(f, "{}", expr),
         }
     }

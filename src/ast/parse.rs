@@ -457,7 +457,7 @@ impl Parser {
                     line: sp.line,
                     col: sp.col,
                 };
-                Ok(Fact::Eq(operator_span, e1, e2))
+                Ok(Fact::Op(operator_span, e1, e2))
             } else {
                 let expr = self.parse_expr()?;
                 self.expect_token(Token::RParen(span()))?;

@@ -1,10 +1,70 @@
 use eggplant_transpiler::ast::parse::Parser;
 use eggplant_transpiler::eggplant::{
-    EggplantCodeGenerator, convert_to_eggplant_with_source,
-    convert_to_eggplant_with_source_and_program,
+    EggplantCodeGenerator, convert_to_eggplant_with_source_and_program,
 };
 
 fn main() {
+    let program = r#"
+(datatype Math
+	(MNum i64)
+	(MVar String)
+	(MAdd Math Math)
+	(MSub Math Math)
+	(MMul Math Math)
+	(MDiv Math Math)
+	(MMod Math Math)
+	(MMin Math Math)
+	(MMax Math Math)
+	(MAnd Math Math)
+	(MOr Math Math)
+	(MGte Math Math)
+	(MLt Math Math)
+	(MFloorTo Math Math)
+    (MReplace Math Math Math)
+    (MAccum String) ; this marks that we feed the output (also marked with MAccum) back in
+)
+
+(datatype LoopType (Loop String Math))
+
+(datatype
+ 	Expr
+     	(GMEM String)
+     	(LoopIn Expr LoopType Math)
+     	(LoopOut Expr LoopType Math)
+      	(SMEM)
+       	(SMEMLoad Expr Expr)
+        (SMEMRead Expr Expr)
+     	(Exp2 Expr)
+      	(Log2 Expr)
+    	(Sqrt Expr)
+     	(Sin Expr)
+      	(Recip Expr)
+       	(Neg Expr)
+     	(Add Expr Expr)
+     	(Mul Expr Expr)
+      	(Max Expr Expr)
+        (Unary String Expr)
+     	(Binary String Expr Expr)
+      	(SwapLoops Expr String String) ; Swap two loops, identified by their string
+       	(TileLoop Expr String) ; Tile a loop, identified by it's string
+        (UnpadLoop Expr String) ; Remove a padding loop, identified by it's string
+)
+    (rewrite (MMul (MNum a) (MNum b)) (MNum (* a b)) :when ((< a 10000) (< b 10000)) :ruleset default)
+
+           
+"#;
+
+    let rust_code = transform_with_log(&program);
+    // Save the generated code to a file
+    let output_path = "generated/eggplant/code.rs";
+    if let Some(parent) = std::path::Path::new(output_path).parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(output_path, &rust_code).expect("Failed to write generated code");
+    println!("\n✅ File has been saved to: {}", output_path);
+}
+#[test]
+fn when_prim() {
     let program = r#"
 (datatype Math
 	(MNum i64)
@@ -55,19 +115,8 @@ fn main() {
         (TileLoop (LoopIn ?body (Loop ?loop (MNum ?range)) ?stride) ?loop)
         (LoopIn (LoopIn ?body (Loop ?loop (MNum (/ ?range 8))) (MReplace ?stride (MVar "z") (MMul (MVar "z") (MNum 8)))) (Loop (+ ?loop "_tile") (MNum 8)) ?stride)
 	:when ((> ?range 8) (= (% ?range 8) 0))
-)
-
-           
-"#;
-
-    let rust_code = transform_with_log(&program);
-    // Save the generated code to a file
-    let output_path = "generated/eggplant/code.rs";
-    if let Some(parent) = std::path::Path::new(output_path).parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    std::fs::write(output_path, &rust_code).expect("Failed to write generated code");
-    println!("\n✅ File has been saved to: {}", output_path);
+)"#;
+    transform(program);
 }
 
 #[test]
@@ -240,11 +289,8 @@ fn transform(program: &str) -> String {
     let mut parser = Parser::default();
     let mut codegen = EggplantCodeGenerator::new();
     let commands = parser.get_program_from_string(None, program).unwrap();
-    let eggplant_commands = convert_to_eggplant_with_source_and_program(
-        &commands,
-        Some("test.egg".to_string()),
-        Some(program),
-    );
+    let eggplant_commands =
+        convert_to_eggplant_with_source_and_program(&commands, Some("test.egg".to_string()));
     let rust_code = codegen.generate_rust(&eggplant_commands);
     println!("\n=== Generated Rust Code ===");
     println!("{}", rust_code);
@@ -266,11 +312,8 @@ fn transform_with_log(program: &str) -> String {
         }
     }
 
-    let eggplant_commands = convert_to_eggplant_with_source_and_program(
-        &commands,
-        Some("test.egg".to_string()),
-        Some(program),
-    );
+    let eggplant_commands =
+        convert_to_eggplant_with_source_and_program(&commands, Some("test.egg".to_string()));
 
     println!("\nGenerated {} eggplant commands:", eggplant_commands.len());
     for (i, cmd) in eggplant_commands.iter().enumerate() {

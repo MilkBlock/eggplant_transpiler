@@ -620,7 +620,7 @@ pub fn convert_to_eggplant_with_source_and_program(
             }
             Command::Check(span, facts) => {
                 for fact in facts {
-                    if let Fact::Eq(_, e1, e2) = fact {
+                    if let Fact::Op(_, e1, e2) = fact {
                         eggplant_commands.push(EggplantCommandWithSource {
                             command: EggplantCommand::Assert {
                                 expr: e1.clone(),
@@ -838,7 +838,7 @@ fn generate_pattern_query_with_context_and_conditions(
     let mut condition_expressions = Vec::new();
 
     for condition in conditions {
-        if let Fact::Eq(span, e1, e2) = condition {
+        if let Fact::Op(span, e1, e2) = condition {
             // Extract operator from span file field (temporary hack)
             let operator = if let Some(ref file) = span.file {
                 if file.starts_with("operator:") {
