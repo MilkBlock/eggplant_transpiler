@@ -201,6 +201,7 @@ pub struct Variant {
     pub span: Span,
     pub name: String,
     pub types: Vec<String>,
+    pub field_names: Vec<String>,
 }
 
 impl Display for Variant {
@@ -208,6 +209,9 @@ impl Display for Variant {
         write!(f, "({}", self.name)?;
         if !self.types.is_empty() {
             write!(f, " {}", ListDisplay(&self.types, " "))?;
+        }
+        if !self.field_names.is_empty() {
+            write!(f, ":args_name \"{}\"", self.field_names.join(","))?;
         }
         write!(f, ")")
     }
@@ -244,7 +248,7 @@ pub enum GenericCommand<Head, Leaf> {
         ruleset: String,
         rule: GenericRule<Head, Leaf>,
     },
-    Rewrite(String, GenericRewrite<Head, Leaf>, bool),
+    Rewrite(String, GenericRewrite<Head, Leaf>, bool, Option<String>),
     BiRewrite(String, GenericRewrite<Head, Leaf>),
     Action(GenericAction<Head, Leaf>),
     Check(Span, Vec<GenericFact<Head, Leaf>>),
@@ -271,11 +275,11 @@ where
 {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            GenericCommand::Rewrite(name, rewrite, subsume) => {
-                rewrite.fmt_with_ruleset(f, name, false, *subsume)
+            GenericCommand::Rewrite(name, rewrite, subsume, rule_name) => {
+                rewrite.fmt_with_ruleset(f, name, false, *subsume, rule_name.as_deref())
             }
             GenericCommand::BiRewrite(name, rewrite) => {
-                rewrite.fmt_with_ruleset(f, name, true, false)
+                rewrite.fmt_with_ruleset(f, name, true, false, None)
             }
             GenericCommand::Datatype {
                 span: _,
@@ -385,6 +389,7 @@ impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
         ruleset: &str,
         is_bidirectional: bool,
         subsume: bool,
+        name: Option<&str>,
     ) -> std::fmt::Result {
         let direction = if is_bidirectional {
             "birewrite"
@@ -400,6 +405,9 @@ impl<Head: Display, Leaf: Display> GenericRewrite<Head, Leaf> {
         }
         if !ruleset.is_empty() {
             write!(f, " :ruleset {ruleset}")?;
+        }
+        if let Some(name) = name {
+            write!(f, " :name {name}")?;
         }
         write!(f, ")")
     }

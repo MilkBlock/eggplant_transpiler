@@ -83,7 +83,7 @@ impl Parser {
     }
 
     fn tokenize(&mut self, input: &str) -> Result<(), ParseError> {
-        // println!("DEBUG: Starting tokenization of input: {}", input);
+        println!("DEBUG: Starting tokenization of input: {}", input);
         self.tokens.clear();
         let mut chars = input.chars().peekable();
 
@@ -94,7 +94,9 @@ impl Parser {
         while let Some(&ch) = chars.peek() {
             match ch {
                 '(' => {
-                    self.tokens.push_back(Token::LParen(self.current_span()));
+                    let token = Token::LParen(self.current_span());
+                    println!("DEBUG: Pushing token: {:?}", token);
+                    self.tokens.push_back(token);
                     chars.next();
                     self.current_col += 1;
                 }
@@ -138,7 +140,7 @@ impl Parser {
                 _ => {
                     let mut symbol = String::new();
                     while let Some(&ch) = chars.peek() {
-                        if ch.is_whitespace() || ch == '(' || ch == ')' {
+                        if ch.is_whitespace() || ch == '(' || ch == ')' || ch == ':' {
                             break;
                         }
                         symbol.push(ch);
@@ -146,27 +148,56 @@ impl Parser {
                         self.current_col += 1;
                     }
 
-                    if symbol.chars().all(|c| {
-                        c.is_ascii_digit()
-                            || (c == '-'
-                                && symbol.len() > 1
-                                && symbol.chars().skip(1).all(|c| c.is_ascii_digit()))
-                    }) {
-                        self.tokens
-                            .push_back(Token::Number(symbol, self.current_span()));
-                    } else if symbol.starts_with(':') {
-                        // println!(
-                        //     "DEBUG: Found keyword token: '{}' at line {}",
-                        //     symbol,
-                        //     self.current_span().line
-                        // );
-                        self.tokens.push_back(Token::Keyword(
-                            symbol[1..].to_string(),
-                            self.current_span(),
-                        ));
+                    if !symbol.is_empty() {
+                        if symbol.chars().all(|c| {
+                            c.is_ascii_digit()
+                                || (c == '-'
+                                    && symbol.len() > 1
+                                    && symbol.chars().skip(1).all(|c| c.is_ascii_digit()))
+                        }) {
+                            self.tokens
+                                .push_back(Token::Number(symbol, self.current_span()));
+                        } else {
+                            self.tokens
+                                .push_back(Token::Symbol(symbol, self.current_span()));
+                        }
+                    }
+
+                    // Handle colon separately for keywords
+                    if let Some(&':') = chars.peek() {
+                        chars.next(); // consume colon
+                        self.current_col += 1;
+
+                        let mut keyword = String::new();
+                        while let Some(&ch) = chars.peek() {
+                            if ch.is_whitespace() || ch == '(' || ch == ')' {
+                                break;
+                            }
+                            keyword.push(ch);
+                            chars.next();
+                            self.current_col += 1;
+                        }
+
+                        if !keyword.is_empty() {
+                            self.tokens
+                                .push_back(Token::Keyword(keyword, self.current_span()));
+                        }
                     } else {
-                        self.tokens
-                            .push_back(Token::Symbol(symbol, self.current_span()));
+                        // If we didn't process a colon, we need to skip any whitespace that follows
+                        // to prevent empty symbols from being created
+                        while let Some(&ch) = chars.peek() {
+                            if ch.is_whitespace() {
+                                if ch == '\n' {
+                                    self.current_line += 1;
+                                    self.current_col = 1;
+                                } else {
+                                    self.current_col += 1;
+                                }
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -285,6 +316,7 @@ impl Parser {
         self.expect_token(Token::LParen(span()))?;
         let (name, sp) = self.parse_symbol()?;
         let mut types = Vec::new();
+        let mut field_names = Vec::new();
 
         // Parse types until we hit a keyword or closing paren
         while let Some(token) = self.peek_token() {
@@ -295,10 +327,22 @@ impl Parser {
             }
         }
 
-        // Skip keyword arguments (like :cost)
+        // Parse keyword arguments
         while let Some(Token::Keyword(_, _)) = self.peek_token() {
-            self.tokens.pop_front(); // Skip keyword
-            self.parse_symbol()?.0; // Skip value
+            let (keyword, _) = self.parse_symbol()?;
+            match keyword.as_str() {
+                "args_name" => {
+                    let (field_names_str, _) = self.parse_string()?;
+                    field_names = field_names_str
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .collect();
+                }
+                _ => {
+                    // Skip unknown keywords
+                    self.parse_symbol()?.0; // Skip value
+                }
+            }
         }
 
         self.expect_token(Token::RParen(span()))?;
@@ -306,6 +350,7 @@ impl Parser {
             span: sp,
             name,
             types,
+            field_names,
         })
     }
 
@@ -384,6 +429,7 @@ impl Parser {
         let rhs = self.parse_expr()?;
         let mut ruleset = "default".to_string();
         let mut conditions = Vec::new();
+        let mut name = None;
 
         // println!(
         //     "DEBUG: Starting rewrite parsing, next tokens: {:?}",
@@ -410,6 +456,11 @@ impl Parser {
                     }
                     self.expect_token(Token::RParen(span()))?;
                 }
+                "name" => {
+                    let (name_str, _) = self.parse_symbol()?;
+                    println!("DEBUG: Found :name with value: '{}'", name_str);
+                    name = Some(name_str);
+                }
                 _ => {
                     // Skip unknown keywords
                     println!("DEBUG: Skipping unknown keyword: '{}'", keyword);
@@ -432,6 +483,7 @@ impl Parser {
                 conditions,
             },
             false,
+            name,
         ))
     }
 

@@ -448,18 +448,33 @@ pub fn convert_to_eggplant_with_source_and_program(
 
                 // Use the datatype command inner variants for this datatype
                 for (counter, variant) in variants.iter().enumerate() {
-                    dsl_variants.push(DslVariant {
-                        name: variant.name.clone(),
-                        fields: variant
+                    let fields: Vec<DslField> = if !variant.field_names.is_empty() {
+                        // Use provided field names from args_name
+                        variant
+                            .types
+                            .iter()
+                            .zip(variant.field_names.iter())
+                            .map(|(ty, field_name)| DslField {
+                                name: field_name.clone(),
+                                field_type: ty.clone(),
+                            })
+                            .collect()
+                    } else {
+                        // Generate default field names
+                        variant
                             .types
                             .iter()
                             .enumerate()
-                            .map(|(i, ty)| (ty, format!("arg_{}_{}{}", ty, counter, i)))
-                            .map(|(ty, name)| DslField {
-                                name,
+                            .map(|(i, ty)| DslField {
+                                name: format!("arg_{}_{}{}", ty, counter, i),
                                 field_type: ty.clone(),
                             })
-                            .collect(),
+                            .collect()
+                    };
+
+                    dsl_variants.push(DslVariant {
+                        name: variant.name.clone(),
+                        fields,
                         source_file: variant.span.file.clone(),
                         source_line: Some(variant.span.line),
                     });
@@ -576,10 +591,9 @@ pub fn convert_to_eggplant_with_source_and_program(
                     source_line: Some(rule.span.line),
                 });
             }
-            Command::Rewrite(_name, rewrite, _) => {
-                // Analyze the rewrite pattern to extract variables and structure
-                // Always use line counter for unique pattern variable names to avoid conflicts
-                let unique_name = format!("rule_{}", rewrite.span.line);
+            Command::Rewrite(_name, rewrite, _, rule_name) => {
+                // Use provided name or generate one based on line number
+                let unique_name = rule_name.clone().unwrap_or_else(|| format!("rule_{}", rewrite.span.line));
                 let (pattern_vars, pattern_query, context, root_node) =
                     analyze_rewrite_pattern_with_conditions(
                         &rewrite.lhs,
@@ -952,11 +966,7 @@ fn generate_pattern_query_with_context_and_conditions(
                     );
 
                     // Generate handle call
-                    let handle_call = if field_name.contains("i64") || field_name.contains("num") {
-                        format!("{}.handle_num()", node_name)
-                    } else {
-                        format!("{}.{}()", node_name, field_name)
-                    };
+                    let handle_call = format!("{}.handle_{}()", node_name, field_name);
 
                     // Generate condition variable name (e.g., "a_b_eq" for variable "a" and "b")
                     let condition_var_name = format!("{}_{}_cond", var_name, literal_value);
