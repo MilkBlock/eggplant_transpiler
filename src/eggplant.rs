@@ -593,7 +593,9 @@ pub fn convert_to_eggplant_with_source_and_program(
             }
             Command::Rewrite(_name, rewrite, _, rule_name) => {
                 // Use provided name or generate one based on line number
-                let unique_name = rule_name.clone().unwrap_or_else(|| format!("rule_{}", rewrite.span.line));
+                let unique_name = rule_name
+                    .clone()
+                    .unwrap_or_else(|| format!("rule_{}", rewrite.span.line));
                 let (pattern_vars, pattern_query, context, root_node) =
                     analyze_rewrite_pattern_with_conditions(
                         &rewrite.lhs,
