@@ -1029,14 +1029,45 @@ fn generate_pattern_query_with_context_and_conditions(
             // );
 
             // Generate condition expression using handle() method
+            // For variables, look up their corresponding constructor nodes and generate field handle calls
+            let left_handle = if let Some((constructor_name, node_name, arg_index)) =
+                variable_constructors.get(&left_var)
+            {
+                // This is a variable with a constructor - generate field handle call
+                let field_name = get_field_name_for_variable_in_constructor(
+                    constructor_name,
+                    *arg_index,
+                    dsl_types,
+                );
+                format!("{}.handle_{}()", node_name, field_name)
+            } else {
+                // This is a literal or other expression - use generic handle()
+                format!("{}.handle()", left_var)
+            };
+
+            let right_handle = if let Some((constructor_name, node_name, arg_index)) =
+                variable_constructors.get(&right_var)
+            {
+                // This is a variable with a constructor - generate field handle call
+                let field_name = get_field_name_for_variable_in_constructor(
+                    constructor_name,
+                    *arg_index,
+                    dsl_types,
+                );
+                format!("{}.handle_{}()", node_name, field_name)
+            } else {
+                // This is a literal or other expression - use generic handle()
+                format!("{}.handle()", right_var)
+            };
+
             let condition_expr = match operator.as_str() {
-                "=" => format!("{}.handle().eq(&{}.handle())", left_var, right_var),
-                "<" => format!("{}.handle().lt(&{}.handle())", left_var, right_var),
-                "<=" => format!("{}.handle().le(&{}.handle())", left_var, right_var),
-                ">" => format!("{}.handle().gt(&{}.handle())", left_var, right_var),
-                ">=" => format!("{}.handle().ge(&{}.handle())", left_var, right_var),
-                "!=" => format!("{}.handle().ne(&{}.handle())", left_var, right_var),
-                _ => format!("{}.handle().eq(&{}.handle())", left_var, right_var), // default to eq
+                "=" => format!("{}.eq(&{})", left_handle, right_handle),
+                "<" => format!("{}.lt(&{})", left_handle, right_handle),
+                "<=" => format!("{}.le(&{})", left_handle, right_handle),
+                ">" => format!("{}.gt(&{})", left_handle, right_handle),
+                ">=" => format!("{}.ge(&{})", left_handle, right_handle),
+                "!=" => format!("{}.ne(&{})", left_handle, right_handle),
+                _ => format!("{}.eq(&{})", left_handle, right_handle), // default to eq
             };
 
             // Generate condition variable with node definitions inside the braces
@@ -1681,107 +1712,193 @@ fn generate_expression_variable(
                 Literal::Unit => "lit_unit".to_string(),
             };
 
-            // Add the literal variable to pattern variables if not already present
-            if !pattern_vars_variables.iter().any(|v| v.name == var_name) {
-                pattern_vars_variables.push(PatternVariable {
-                    name: var_name.clone(),
-                    var_type: infer_type_from_literal(lit),
-                });
-            }
+            // For literals, we don't add them to pattern variables since they are basic types
+            // Only complex types should be added to pattern variables
 
             var_name
         }
         Expr::Call(_, func_name, args) => {
-            // For constructor calls, generate a variable and query
-            let node_name = format!("node_{}", node_counter);
-            *node_counter += 1;
+            // Check if this is a known constructor in DslTypes or a basic type
+            let is_known_constructor =
+                dsl_types.contains_key(func_name) || is_basic_type(func_name);
 
-            // Extract variables or literal values for arguments
-            let arg_values: Vec<String> = args
-                .iter()
-                .map(|arg| match arg {
-                    Expr::Lit(_, lit) => {
-                        // For literals, use the literal value directly
-                        match lit {
-                            Literal::Int(i) => i.to_string(),
-                            Literal::Float(f) => f.0.to_string(),
-                            Literal::String(s) => format!("\"{}\"", s),
-                            Literal::Bool(b) => b.to_string(),
-                            Literal::Unit => "()".to_string(),
-                        }
-                    }
-                    _ => {
-                        // For other expressions, generate variables
-                        generate_expression_variable(
-                            arg,
-                            dsl_types,
-                            pattern_query_parts,
-                            pattern_vars_variables,
-                            node_counter,
-                            variable_constructors,
-                        )
-                    }
-                })
-                .collect();
+            if !is_known_constructor {
+                // This is an unknown action/function call - generate function call format
+                let node_name = format!("node_{}", node_counter);
+                *node_counter += 1;
 
-            // Generate query for this constructor
-            let query = if arg_values.is_empty() {
-                format!("let {} = {}::query_leaf();", node_name, func_name)
-            } else {
-                // For constructor calls with literal arguments, use method chaining
-                // e.g., MNum::query().num(&1) instead of MNum::query(&1)
-                let constructor_name = func_name.to_string();
-                let mut query_parts =
-                    vec![format!("let {} = {}::query()", node_name, constructor_name)];
-
-                // Get the constructor variant to determine field names
-                if let Some(dsl_type) = dsl_types.get(&constructor_name) {
-                    for (i, arg_value) in arg_values.iter().enumerate() {
-                        if let Some(variant) = dsl_type
-                            .variants
-                            .iter()
-                            .find(|v| v.name == constructor_name)
-                        {
-                            if i < variant.fields.len() {
-                                let field_name =
-                                    format!("arg_{}_{:02}", variant.fields[i].field_type, i);
-                                query_parts.push(format!(".{}(&{})", field_name, arg_value));
-                            } else {
-                                // Fallback if we don't have enough type info
-                                query_parts.push(format!(".arg_{:02}(&{})", i, arg_value));
+                // Extract variables or literal values for arguments
+                let arg_values: Vec<String> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Lit(_, lit) => {
+                            // For literals, use the literal value directly
+                            match lit {
+                                Literal::Int(i) => i.to_string(),
+                                Literal::Float(f) => f.0.to_string(),
+                                Literal::String(s) => format!("\"{}\"", s),
+                                Literal::Bool(b) => b.to_string(),
+                                Literal::Unit => "()".to_string(),
                             }
-                        } else {
-                            // Fallback if variant not found
-                            query_parts.push(format!(".arg_{:02}(&{})", i, arg_value));
                         }
-                    }
+                        Expr::Var(_, var_name) => {
+                            // For variables, check if they have constructor context
+                            let normalized_var_name = normalize_identifier(var_name);
+                            if let Some((constructor_name, node_name, arg_index)) =
+                                variable_constructors.get(&normalized_var_name)
+                            {
+                                // This variable has constructor context - generate handle call
+                                let field_name = get_field_name_for_variable_in_constructor(
+                                    constructor_name,
+                                    *arg_index,
+                                    dsl_types,
+                                );
+                                format!("{}.handle_{}()", node_name, field_name)
+                            } else {
+                                // No constructor context - use the variable name
+                                normalized_var_name
+                            }
+                        }
+                        _ => {
+                            // For other expressions, generate variables
+                            generate_expression_variable(
+                                arg,
+                                dsl_types,
+                                pattern_query_parts,
+                                pattern_vars_variables,
+                                node_counter,
+                                variable_constructors,
+                            )
+                        }
+                    })
+                    .collect();
+
+                // Generate function call query
+                let query = if arg_values.is_empty() {
+                    format!("let {} = {}::query_leaf();", node_name, func_name)
                 } else {
-                    // Fallback if type not found
+                    // Generate function call with arguments
+                    // For operators like %, use a valid function name
+                    let valid_func_name = format!("TODO_{}", func_name);
+                    let mut query_parts =
+                        vec![format!("let {} = {}::query()", node_name, valid_func_name)];
+
                     for (i, arg_value) in arg_values.iter().enumerate() {
                         query_parts.push(format!(".arg_{:02}(&{})", i, arg_value));
                     }
+
+                    query_parts.push(";".to_string());
+                    query_parts.join("")
+                };
+
+                pattern_query_parts.push(query);
+
+                // For unknown actions, assume return type is i64 (most common for arithmetic operations)
+                let return_type = "i64".to_string();
+
+                // Add to pattern variables only if it's a complex type
+                if !is_basic_type(&return_type)
+                    && !pattern_vars_variables.iter().any(|v| v.name == node_name)
+                {
+                    pattern_vars_variables.push(PatternVariable {
+                        name: node_name.clone(),
+                        var_type: return_type,
+                    });
                 }
 
-                query_parts.push(";".to_string());
-                query_parts.join("")
-            };
+                node_name
+            } else {
+                // This is a known constructor - use the existing logic
+                let node_name = format!("node_{}", node_counter);
+                *node_counter += 1;
 
-            pattern_query_parts.push(query);
+                // Extract variables or literal values for arguments
+                let arg_values: Vec<String> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        Expr::Lit(_, lit) => {
+                            // For literals, use the literal value directly
+                            match lit {
+                                Literal::Int(i) => i.to_string(),
+                                Literal::Float(f) => f.0.to_string(),
+                                Literal::String(s) => format!("\"{}\"", s),
+                                Literal::Bool(b) => b.to_string(),
+                                Literal::Unit => "()".to_string(),
+                            }
+                        }
+                        _ => {
+                            // For other expressions, generate variables
+                            generate_expression_variable(
+                                arg,
+                                dsl_types,
+                                pattern_query_parts,
+                                pattern_vars_variables,
+                                node_counter,
+                                variable_constructors,
+                            )
+                        }
+                    })
+                    .collect();
 
-            // Infer the correct return type for this constructor
-            let return_type = infer_variable_type_from_constructor(func_name, 0, dsl_types);
+                // Generate query for this constructor
+                let query = if arg_values.is_empty() {
+                    format!("let {} = {}::query_leaf();", node_name, func_name)
+                } else {
+                    // For constructor calls with literal arguments, use method chaining
+                    // e.g., MNum::query().num(&1) instead of MNum::query(&1)
+                    let constructor_name = func_name.to_string();
+                    let mut query_parts =
+                        vec![format!("let {} = {}::query()", node_name, constructor_name)];
 
-            // Add to pattern variables only if it's a complex type
-            if !is_basic_type(&return_type)
-                && !pattern_vars_variables.iter().any(|v| v.name == node_name)
-            {
-                pattern_vars_variables.push(PatternVariable {
-                    name: node_name.clone(),
-                    var_type: return_type,
-                });
+                    // Get the constructor variant to determine field names
+                    if let Some(dsl_type) = dsl_types.get(&constructor_name) {
+                        for (i, arg_value) in arg_values.iter().enumerate() {
+                            if let Some(variant) = dsl_type
+                                .variants
+                                .iter()
+                                .find(|v| v.name == constructor_name)
+                            {
+                                if i < variant.fields.len() {
+                                    let field_name =
+                                        format!("arg_{}_{:02}", variant.fields[i].field_type, i);
+                                    query_parts.push(format!(".{}(&{})", field_name, arg_value));
+                                } else {
+                                    // Fallback if we don't have enough type info
+                                    query_parts.push(format!(".arg_{:02}(&{})", i, arg_value));
+                                }
+                            } else {
+                                // Fallback if variant not found
+                                query_parts.push(format!(".arg_{:02}(&{})", i, arg_value));
+                            }
+                        }
+                    } else {
+                        // Fallback if type not found
+                        for (i, arg_value) in arg_values.iter().enumerate() {
+                            query_parts.push(format!(".arg_{:02}(&{})", i, arg_value));
+                        }
+                    }
+
+                    query_parts.push(";".to_string());
+                    query_parts.join("")
+                };
+
+                pattern_query_parts.push(query);
+
+                // Infer the correct return type for this constructor
+                let return_type = infer_variable_type_from_constructor(func_name, 0, dsl_types);
+
+                // Add to pattern variables only if it's a complex type
+                if !is_basic_type(&return_type)
+                    && !pattern_vars_variables.iter().any(|v| v.name == node_name)
+                {
+                    pattern_vars_variables.push(PatternVariable {
+                        name: node_name.clone(),
+                        var_type: return_type,
+                    });
+                }
+
+                node_name
             }
-
-            node_name
         }
     }
 }
