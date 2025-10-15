@@ -90,10 +90,29 @@ pub struct EggplantCommandWithSource {
     pub source_line: Option<usize>,
 }
 
+/// Code generation options
+#[derive(Debug, Clone, Default)]
+pub struct CodeGenOptions {
+    /// Whether to omit the main function wrapper
+    pub omit_main: bool,
+    /// Whether to omit use statements (prelude, etc.)
+    pub omit_use_statements: bool,
+    /// Whether to omit ruleset definitions
+    pub omit_ruleset_definitions: bool,
+    /// Whether to omit run_ruleset calls
+    pub omit_run_ruleset_calls: bool,
+    /// Whether to omit global singleton definitions like tx_rx_vt_pr!
+    pub omit_global_singleton_definitions: bool,
+    /// Whether to omit datatype definitions (#[eggplant::dsl])
+    pub omit_datatype: bool,
+    pub omit_head_annotation: bool,
+}
+
 /// Eggplant code generator
 pub struct EggplantCodeGenerator {
     output: String,
     indent_level: usize,
+    options: CodeGenOptions,
 }
 
 impl EggplantCodeGenerator {
@@ -101,6 +120,16 @@ impl EggplantCodeGenerator {
         Self {
             output: String::new(),
             indent_level: 0,
+            options: CodeGenOptions::default(),
+        }
+    }
+
+    /// Create a new code generator with custom options
+    pub fn with_options(options: CodeGenOptions) -> Self {
+        Self {
+            output: String::new(),
+            indent_level: 0,
+            options,
         }
     }
 
@@ -108,17 +137,29 @@ impl EggplantCodeGenerator {
     pub fn generate_rust(&mut self, commands: &[EggplantCommandWithSource]) -> String {
         self.output.clear();
 
-        self.add_line("// Generated Eggplant Rust Code");
-        self.add_line("// Source files referenced in comments below");
-        self.add_line("use eggplant::{{prelude::*, tx_rx_vt_pr}};");
-        self.add_line("use log::info;");
-        self.add_line("");
+        if !self.options.omit_head_annotation {
+            self.add_line("// Generated Eggplant Rust Code");
+            self.add_line("// Source files referenced in comments below");
+        }
+
+        // Add use statements unless omitted
+        if !self.options.omit_use_statements {
+            if !self.options.omit_global_singleton_definitions {
+                self.add_line("use eggplant::{{prelude::*, tx_rx_vt_pr}};");
+            } else {
+                self.add_line("use eggplant::prelude::*;");
+            }
+            self.add_line("use log::info;");
+            self.add_line("");
+        }
 
         // Generate type definitions (outside main)
         for cmd_with_source in commands {
             match &cmd_with_source.command {
                 EggplantCommand::DslType(_) => {
-                    self.generate_rust_command_with_source(cmd_with_source);
+                    if !self.options.omit_datatype {
+                        self.generate_rust_command_with_source(cmd_with_source);
+                    }
                 }
                 _ => {}
             }
@@ -131,7 +172,9 @@ impl EggplantCodeGenerator {
         for cmd_with_source in commands {
             match &cmd_with_source.command {
                 EggplantCommand::Ruleset(_) => {
-                    ruleset_definitions.push(cmd_with_source);
+                    if !self.options.omit_ruleset_definitions {
+                        ruleset_definitions.push(cmd_with_source);
+                    }
                 }
                 EggplantCommand::DslType(_) => {
                     // Skip type definitions (already generated above)
@@ -142,24 +185,36 @@ impl EggplantCodeGenerator {
             }
         }
 
-        // Add main function
-        self.add_line("fn main() {");
-        self.indent();
-        self.add_line("env_logger::init();");
+        // Add main function unless omitted
+        if !self.options.omit_main {
+            self.add_line("fn main() {");
+            self.indent();
+            self.add_line("env_logger::init();");
 
-        // Generate ruleset definitions at the beginning of main
-        for cmd_with_source in ruleset_definitions {
-            self.generate_rust_command_with_source(cmd_with_source);
+            // Generate ruleset definitions at the beginning of main
+            for cmd_with_source in ruleset_definitions {
+                self.generate_rust_command_with_source(cmd_with_source);
+            }
+
+            // Generate PatternVars and other runtime commands inside main
+            for cmd_with_source in other_commands {
+                self.generate_rust_command_with_source(cmd_with_source);
+            }
+
+            self.add_line("info!(\"Eggplant program executed successfully!\");");
+            self.dedent();
+            self.add_line("}");
+        } else {
+            // Generate ruleset definitions and other commands without main wrapper
+            for cmd_with_source in ruleset_definitions {
+                self.generate_rust_command_with_source(cmd_with_source);
+            }
+
+            // Generate PatternVars and other runtime commands
+            for cmd_with_source in other_commands {
+                self.generate_rust_command_with_source(cmd_with_source);
+            }
         }
-
-        // Generate PatternVars and other runtime commands inside main
-        for cmd_with_source in other_commands {
-            self.generate_rust_command_with_source(cmd_with_source);
-        }
-
-        self.add_line("info!(\"Eggplant program executed successfully!\");");
-        self.dedent();
-        self.add_line("}");
 
         self.output.clone()
     }
@@ -169,7 +224,9 @@ impl EggplantCodeGenerator {
         if let (Some(file), Some(line)) =
             (&cmd_with_source.source_file, cmd_with_source.source_line)
         {
-            self.add_line(&format!("// Source: {}:{}", file, line));
+            if !self.options.omit_head_annotation {
+                self.add_line(&format!("// Source: {}:{}", file, line));
+            }
         }
 
         match &cmd_with_source.command {
@@ -179,13 +236,17 @@ impl EggplantCodeGenerator {
                     dsl_type.name
                 ));
                 for variant in &dsl_type.variants {
-                    if let (Some(file), Some(line)) = (&variant.source_file, variant.source_line) {
-                        self.add_line(&format!(
-                            "//   - {}: variant (defined at {}:{})",
-                            variant.name, file, line
-                        ));
-                    } else {
-                        self.add_line(&format!("//   - {}: variant", variant.name));
+                    if !self.options.omit_head_annotation {
+                        if let (Some(file), Some(line)) =
+                            (&variant.source_file, variant.source_line)
+                        {
+                            self.add_line(&format!(
+                                "//   - {}: variant (defined at {}:{})",
+                                variant.name, file, line
+                            ));
+                        } else {
+                            self.add_line(&format!("//   - {}: variant", variant.name));
+                        }
                     }
                 }
                 self.add_line(&format!("#[eggplant::dsl]"));
@@ -208,13 +269,15 @@ impl EggplantCodeGenerator {
             }
             EggplantCommand::PatternVars(pattern_vars) => {
                 // Display original egglog statement if available
-                self.add_line(&format!("// Pattern variables for rule matching"));
-                let var_names: Vec<String> = pattern_vars
-                    .variables
-                    .iter()
-                    .map(|v| v.name.clone())
-                    .collect();
-                self.add_line(&format!("// Variables: {}", var_names.join(", ")));
+                if !self.options.omit_head_annotation {
+                    self.add_line(&format!("// Pattern variables for rule matching"));
+                    let var_names: Vec<String> = pattern_vars
+                        .variables
+                        .iter()
+                        .map(|v| v.name.clone())
+                        .collect();
+                    self.add_line(&format!("// Variables: {}", var_names.join(", ")));
+                }
                 self.add_line(&format!("#[eggplant::pat_vars]"));
                 self.add_line(&format!("struct {} {{", pattern_vars.name));
                 self.indent();
@@ -226,8 +289,10 @@ impl EggplantCodeGenerator {
                 self.add_line("");
             }
             EggplantCommand::Rule(rule) => {
-                self.add_line(&format!("// Rule: {}", rule.name));
-                self.add_line(&format!("// {}", rule.src_expr));
+                if !self.options.omit_head_annotation {
+                    self.add_line(&format!("// Rule: {}", rule.name));
+                    self.add_line(&format!("// {}", rule.src_expr));
+                }
                 self.add_line(&format!("MyTx::add_rule("));
                 self.indent();
                 self.add_line(&format!("\"{}\",", rule.name));
@@ -250,8 +315,10 @@ impl EggplantCodeGenerator {
                 self.add_line(&format!("let {} = MyTx::new_ruleset(\"{}\");", name, name));
             }
             EggplantCommand::Transaction(name) => {
-                self.add_line(&format!("tx_rx_vt_pr!({}, MyPatRec);", name));
-                self.add_line("");
+                if !self.options.omit_global_singleton_definitions {
+                    self.add_line(&format!("tx_rx_vt_pr!({}, MyPatRec);", name));
+                    self.add_line("");
+                }
             }
             EggplantCommand::PatternRecorder(name) => {
                 self.add_line(&format!("// Pattern recorder: {}", name));
@@ -263,10 +330,12 @@ impl EggplantCodeGenerator {
                 self.add_line(&format!("{}.pull();", expr));
             }
             EggplantCommand::RunRuleset(ruleset, config) => {
-                self.add_line(&format!(
-                    "{}::run_ruleset({}, RunConfig::{});",
-                    ruleset, "default_ruleset", config
-                ));
+                if !self.options.omit_run_ruleset_calls {
+                    self.add_line(&format!(
+                        "{}::run_ruleset({}, RunConfig::{});",
+                        ruleset, "default_ruleset", config
+                    ));
+                }
             }
             EggplantCommand::Assert { expr, expected } => {
                 self.add_line(&format!(
@@ -595,7 +664,7 @@ pub fn convert_to_eggplant_with_source_and_program(
                 // Use provided name or generate one based on line number
                 let unique_name = rule_name
                     .clone()
-                    .unwrap_or_else(|| format!("rule_{}", rewrite.span.line));
+                    .unwrap_or_else(|| format!("rule_{}_{}", rewrite.span.line, rewrite.span.col));
                 let (pattern_vars, pattern_query, context, root_node) =
                     analyze_rewrite_pattern_with_conditions(
                         &rewrite.lhs,
@@ -803,20 +872,6 @@ fn infer_variable_type_from_constructor(
     // Fallback: if constructor not found in DSL types, use the constructor name as type
     // println!("WARNING: {} infer to be itself", constructor_name);
     constructor_name.to_string()
-}
-
-/// Generate better pattern query with type inference and variable context
-fn generate_pattern_query_with_context(
-    lhs: &Expr,
-    rule_name: &str,
-    dsl_types: &HashMap<String, DslType>,
-) -> (
-    PatternVars,
-    String,
-    HashMap<String, (String, String, usize)>,
-    String, // root node name
-) {
-    generate_pattern_query_with_context_and_conditions(lhs, rule_name, dsl_types, &[])
 }
 
 /// Generate better pattern query with type inference, variable context, and conditions

@@ -168,6 +168,15 @@ impl Parser {
                         chars.next(); // consume colon
                         self.current_col += 1;
 
+                        while let Some(ch) = chars.peek() {
+                            if ch.is_whitespace() {
+                                chars.next();
+                                self.current_col += 1;
+                            } else {
+                                break;
+                            }
+                        }
+
                         let mut keyword = String::new();
                         while let Some(&ch) = chars.peek() {
                             if ch.is_whitespace() || ch == '(' || ch == ')' {
